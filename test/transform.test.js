@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert"
-import { transform } from "../transform/transform_acorn.ts"
+import { transform } from "../instrument/transform_acorn.ts"
 import dedent from "dedent-js"
 
 
@@ -66,6 +66,28 @@ describe("transform_acorn", () => {
     // }
     assert.match(res, /function dog\([-\w\d]{36}\)\s+\{[\s\S]*let \{a, b\} = [-\w\d]{36};\s+\}/)
   })
+  it("should handle nested array destructuring", () => {
+    const res = transform("function dog([a, [b, c]]) {}", "file")
+
+    // should look like
+    // function dog(UUID) {
+    //   global.__logarg("file:0", UUID)
+    //   let [a, [b, c]] = UUID
+    // }
+    assert.match(res, /function dog\([-\w\d]{36}\)\s+\{[\s\S]*let \[a, \[b, c\]\] = [-\w\d]{36};\s+\}/)
+    
+  })
+  it("should handle nested object destructuring", () => {
+    const res = transform("function dog({a: {b, c}}) {}", "file")
+
+    // should look like
+    // function dog(UUID) {
+    //   global.__logarg("file:0", UUID)
+    //   let {a: {b, c}} = UUID
+    // }
+    assert.match(res, /function dog\([-\w\d]{36}\)\s+\{[\s\S]*let \{a: \{b, c\}\} = [-\w\d]{36};\s+\}/)
+  })
+  
   it("should handle assignment", () => {
     const res = transform("function dog(a = 5) {}", "file")
     assert.match(res, /function dog\(a = 5\)\s+\{[\s\S]*\}/)

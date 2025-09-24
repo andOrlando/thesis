@@ -60,7 +60,8 @@ global.__logdelyield = function<T>(loc: string, val: Iterator<T>): Iterator<T> {
   return val
 }
 
-process.on("exit", () => {
+process.on("beforeExit", () => {
+  // can schedule async tasks if I feel like it
   console.log(calls)
   console.log(returns)
   console.log(yields)
