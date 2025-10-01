@@ -1,6 +1,8 @@
-import hash from "object-hash"
 import locate from "../utils/function_location.ts"
 import type { Location } from "../utils/function_location.ts"
+
+// generator constructor for detecting if object is generator
+const GeneratorFunction = function*(){}.constructor;
 
 // we will pass around reference typeinfos rather than the full information for two reasons:
 // 1. anything we see later with the same ref we want to update the types of everything else with that ref
@@ -56,11 +58,8 @@ class FunctionRefTI extends TypeInfo {
   get location() {
     return function_typeinfo_map.get(this.ref)!.location
   }
-  get params() {
-    return function_typeinfo_map.get(this.ref)!.params
-  }
-  get returns() {
-    return function_typeinfo_map.get(this.ref)!.returns
+  get trace() {
+    return function_typeinfo_map.get(this.ref)!.trace
   }
   get uuid() {
     return function_typeinfo_map.get(this.ref)!.uuid
@@ -73,8 +72,7 @@ class FunctionTI extends TypeInfo {
   // TODO: it's probably bad to have this as a promise
   // not sure yet how to resolve the async
   location: Promise<Location|undefined>
-  params: TypeInfo[]
-  returns: TypeInfo[]
+  trace?: Trace
   uuid: string
   constructor(t: Function) {
     super(t)
@@ -203,7 +201,38 @@ global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...a
   
   const callid = crypto.randomUUID()
   inflight[callid] = new Trace(args)
-  // TODO: wrap all functions before returning
+
+  // wrap all of our arguments that are functions
+  args = args.map(arg => {
+    if (typeof arg !== "function") return arg
+    
+    // at this point we've created the typeinfo so we
+    // should already be in the function_typeinfo_map
+    const fti = function_typeinfo_map.get(arg)!
+    const wrapped = function(...args: any[]) {
+      fti.trace = new Trace(args)
+      const res = arg(...args)
+
+      // if we're not a generator just profile the return
+      if (typeof res !== "object" || res.constructor !== GeneratorFunction) {
+        fti.trace.returns = compute_typeinfo(res)
+        return res
+      }
+
+      // otherwise we have to wrap the generator in the same way
+      const _next = res.next
+      res.next = function(...b: any[]) {
+        const next: { value: any, done?: boolean } = _next(...b)
+        if (!next.done) fti.trace!.yields.push(compute_typeinfo(next.value))
+        else fti.trace!.returns = compute_typeinfo(next.value)
+        return next
+      }
+      return res
+    }
+
+    function_typeinfo_map.set(wrapped, fti)
+  })
+  
   return [callid, ...args]
 }
 
@@ -227,13 +256,15 @@ global.__logyield = function(callid: string|undefined, val: any): any {
 }
 
 // delegated yield, wrap the iterator
-global.__logdelyield = function<T>(callid: string|undefined, val: Iterator<T>): Iterator<T> {
+global.__logdelyield = function<T>(callid: string|undefined, val: Generator<T>): Generator<T> {
   if (callid === undefined) return val
-  const oldnext = val.next
-  val.next = () => {
-    const res = oldnext()
-    inflight[callid].yields.push(compute_typeinfo(res))
-    return res
+
+  const _next = val.next
+  val.next = function(...a) {
+    const next: { value: T, done?: boolean } = _next(...a)
+    if (!next.done) inflight[callid].yields.push(compute_typeinfo(next.value))
+    else inflight[callid].returns = compute_typeinfo(next.value)
+    return next
   }
   return val
 }
