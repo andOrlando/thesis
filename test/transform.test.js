@@ -3,17 +3,27 @@ import assert from "node:assert"
 import { transform } from "../instrument/transform_acorn.ts"
 import dedent from "dedent-js"
 
+// literal + regex + dedent
+function litd(parts, ...rxps) {
+  return new RegExp(
+    dedent(parts.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .map((s, i) => s + (rxps[i] ? rxps[i].source : ""))
+      .join(""))
+  );
+}
+const uuid = /[_\w\d]{36}/
+
 
 describe("transform_acorn", () => {
   it("should instrument function definitions", () => {
     const res = transform("function dog() { return 'dog' }", "file")
 
     // should see log for arg and ret
-    assert.equal(res.trim(), dedent(`
+    assert.match(res.trim(), litd`
     function dog() {
-      global.__logarg("file:0");
-      return global.__logret("file:0", 'dog');
-    }`))
+      let [${uuid}] = global.__logarg("file:0");
+      return global.__logret("file:0", ${uuid}, 'dog');
+    }`)
   })
 
   it("should instrument nested functions correctly", () => {
@@ -25,104 +35,119 @@ describe("transform_acorn", () => {
       return dog2();
     }`), "file")
 
-  assert.equal(res.trim(), dedent(`
+    assert.match(res.trim(), litd`
     function dog() {
-      global.__logarg("file:0");
+      let [${uuid}] = global.__logarg("file:0");
       function dog2() {
-        global.__logarg("file:19");
-        return global.__logret("file:19", "dog2");
+        let [${uuid}] = global.__logarg("file:19");
+        return global.__logret("file:19", ${uuid}, "dog2");
       }
-      return global.__logret("file:0", dog2());
-    }`))
+      return global.__logret("file:0", ${uuid}, dog2());
+    }`)
   })
 
   it("should instrument for multiple arguments", () => {
     const res = transform("function dog(a, b) { return a + b }", "file")
-    assert.equal(res.trim(), dedent(`
-    function dog(a, b) {
-      global.__logarg("file:0", a, b);
-      return global.__logret("file:0", a + b);
-    }
-    `))
+    assert.match(res.trim(), litd`
+    function dog(${uuid}, ${uuid}) {
+      let [${uuid}, a, b] = global.__logarg("file:0", ${uuid}, ${uuid});
+      return global.__logret("file:0", ${uuid}, a + b);
+    }`)
+  })
+
+  it("should instrument functions without returns", () => {
+    const res = transform("function dog() {}", "file")
+    assert.match(res.trim(), litd`
+    function dog() {
+      let [${uuid}] = global.__logarg("file:0");
+      return global.__logret("file:0", ${uuid}, undefined);
+    }`)
   })
 
   it("should handle array destructuring", () => {
     const res = transform("function dog([a, b]) {}", "file")
-
-    // should look like
-    // function dog(UUID) {
-    //   global.__logarg("file:0", UUID)
-    //   let [a, b] = UUID
-    // }
-    assert.match(res, /function dog\([-\w\d]{36}\)\s+\{[\s\S]*let \[a, b\] = [-\w\d]{36};\s+\}/)
+    assert.match(res.trim(), litd`
+    function dog(${uuid}) {
+      let [${uuid}, [a, b]] = global.__logarg("file:0", ${uuid});
+      return global.__logret("file:0", ${uuid}, undefined);
+    }`)
   })
+
   it("should handle object destructuring", () => {
     const res = transform("function dog({a, b}) {}", "file")
-
-    // should look like
-    // function dog(UUID) {
-    //   global.__logarg("file:0", UUID)
-    //   let {a, b} = UUID
-    // }
-    assert.match(res, /function dog\([-\w\d]{36}\)\s+\{[\s\S]*let \{a, b\} = [-\w\d]{36};\s+\}/)
+    assert.match(res.trim(), litd`
+    function dog(${uuid}) {
+      let [${uuid}, {a, b}] = global.__logarg("file:0", ${uuid});
+      return global.__logret("file:0", ${uuid}, undefined);
+    }`)
   })
+
   it("should handle nested array destructuring", () => {
     const res = transform("function dog([a, [b, c]]) {}", "file")
-
-    // should look like
-    // function dog(UUID) {
-    //   global.__logarg("file:0", UUID)
-    //   let [a, [b, c]] = UUID
-    // }
-    assert.match(res, /function dog\([-\w\d]{36}\)\s+\{[\s\S]*let \[a, \[b, c\]\] = [-\w\d]{36};\s+\}/)
-    
+    assert.match(res.trim(), litd`
+    function dog(${uuid}) {
+      let [${uuid}, [a, [b, c]]] = global.__logarg("file:0", ${uuid});
+      return global.__logret("file:0", ${uuid}, undefined);
+    }`)
   })
+
   it("should handle nested object destructuring", () => {
     const res = transform("function dog({a: {b, c}}) {}", "file")
-
-    // should look like
-    // function dog(UUID) {
-    //   global.__logarg("file:0", UUID)
-    //   let {a: {b, c}} = UUID
-    // }
-    assert.match(res, /function dog\([-\w\d]{36}\)\s+\{[\s\S]*let \{a: \{b, c\}\} = [-\w\d]{36};\s+\}/)
+    assert.match(res.trim(), litd`
+    function dog(${uuid}) {
+      let [${uuid}, {a: {b, c}}] = global.__logarg("file:0", ${uuid});
+      return global.__logret("file:0", ${uuid}, undefined);
+    }`)
   })
   
   it("should handle assignment", () => {
     const res = transform("function dog(a = 5) {}", "file")
-    assert.match(res, /function dog\(a = 5\)\s+\{[\s\S]*\}/)
-    
+    assert.match(res.trim(), litd`
+    function dog(${uuid} = 5) {
+      let [${uuid}, a] = global.__logarg("file:0", ${uuid});
+      return global.__logret("file:0", ${uuid}, undefined);
+    }`)
   })
 
   it("should handle assignment with non-identifiers", () => {
     const res = transform("function dog({a, b} = {a: 5, b: 5}) {}", "file")
-    assert.match(res, /function dog\([-\w\d]{36} = {\s*a: 5,\s*b: 5\s*}\)\s+\{[\s\S]*let \{a, b\} = [-\w\d]{36};\s+\}/)
+    // weird formatting is astring's default output
+    assert.match(res.trim(), litd`
+    function dog(${uuid} = {
+      a: 5,
+      b: 5
+    }) {
+      let [${uuid}, {a, b}] = global.__logarg("file:0", ${uuid});
+      return global.__logret("file:0", ${uuid}, undefined);
+    }`)
   })
 
   it("should handle expression functions", () => {
     const res = transform("dog = () => 'dog'", "file")
-    assert.equal(res.trim(), dedent(`
+    assert.match(res.trim(), litd`
     dog = () => {
-      global.__logarg("file:6");
-      return global.__logret("file:6", 'dog');
-    };`))
+      let [${uuid}] = global.__logarg("file:6");
+      return global.__logret("file:6", ${uuid}, 'dog');
+    };`)
   })
 
   it("should handle yeilds", () => {
-    const res = transform("function* dog() { yield 5 }", "file")
-    assert.equal(res.trim(), dedent(`
+    const res = transform("function* dog() { yield 5; return undefined }", "file")
+    assert.match(res.trim(), litd`
     function* dog() {
-      global.__logarg("file:0");
-      yield global.__logyield("file:0", 5);
-    }`))
+      let [${uuid}] = global.__logarg("file:0");
+      yield global.__logyield(${uuid}, 5);
+      return global.__logret("file:0", ${uuid}, undefined);
+    }`)
   })
 
   it("should handle delegate yields", () => {
-    const res = transform("function* dog() { yield* [5] }", "file")
-    assert.equal(res.trim(), dedent(`
+    const res = transform("function* dog() { yield* [5]; return undefined }", "file")
+    assert.match(res.trim(), litd`
     function* dog() {
-      global.__logarg("file:0");
-      yield* global.__logdelyield("file:0", [5]);
-    }`))
+      let [${uuid}] = global.__logarg("file:0");
+      yield* global.__logdelyield(${uuid}, [5]);
+      return global.__logret("file:0", ${uuid}, undefined);
+    }`)
   })
 })
