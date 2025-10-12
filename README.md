@@ -49,4 +49,5 @@ all functions are annotated such that we send args, yields and returns. Args wil
 - determine performance impact of `function_location.ts` (since we attach debugger)
 - add tests for typeinfo
 - move typeinfo to its own file
-
+- literally anything with promises
+- profile elements of array destructuring rather than the array itself

@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "",
   "exports": {
-    "./entry_sync": "./instrument/entry_sync.ts",
-    "./entry": "./instrument/entry_worker.ts"
+    "./entry": "./instrument/entry_sync.ts",
+    "./entry_worker": "./instrument/entry_worker.ts"
   },
   "main": "main.js",
   "scripts": {

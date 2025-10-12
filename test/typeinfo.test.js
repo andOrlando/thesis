@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert"
-import { compute_typeinfo, PrimitiveTI, ObjectTI } from "../instrument/instrument.ts"
+import { compute_typeinfo, PrimitiveTI, ObjectTI } from "../typeinfo/types.ts"
 
 
 describe("type to typeinfo", () => { 
@@ -14,6 +14,7 @@ describe("type to typeinfo", () => {
   })
 
   it("should handle objects", () => {
+    console.log(compute_typeinfo({ a: 1, b: "hi" }))
     assert.equal("{a:number,b:string}", compute_typeinfo({ a: 1, b: "hi" }).toString())
   })
 

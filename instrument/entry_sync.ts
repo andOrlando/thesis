@@ -1,6 +1,6 @@
 import { registerHooks } from "node:module"
-import { transform } from "./transform_acorn.ts"
-import "../instrument/instrument.ts"
+import { instrument, filenames } from "./instrument.ts"
+import "./trace.ts"
 
 // https://nodejs.org/api/module.html#customization-hooks
 
@@ -18,13 +18,16 @@ registerHooks({
     // no node_modules
     if (url.includes("node_modules")) return loaded
     
-    loaded.source = transform(String(loaded.source), url)
+    loaded.source = instrument(String(loaded.source), url.substring(7))
 
     return loaded
   }
 })
 
-
+import { transform } from "../transform/transform.ts"
+process.on("beforeExit", () => {
+  filenames.forEach(a => transform(a))
+})
 
 
 

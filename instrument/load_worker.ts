@@ -1,4 +1,4 @@
-import { transform } from "./transform_acorn.ts"
+import { instrument } from "./instrument.ts"
 import type { Module } from "node:module"
 
 export async function load(
@@ -15,7 +15,7 @@ export async function load(
   // no node_modules
   if (url.includes("node_modules")) return loaded
 
-  loaded.source = transform(String(loaded.source), url)
+  loaded.source = instrument(String(loaded.source), url.substring(7))
 
   return loaded
 }

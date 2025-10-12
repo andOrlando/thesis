@@ -1,275 +1,274 @@
-import locate from "../utils/function_location.ts"
-import type { Location } from "../utils/function_location.ts"
+import * as acorn from "acorn"
+import * as walk from "acorn-walk"
+import * as astring from "astring"
 
-// generator constructor for detecting if object is generator
-const GeneratorFunction = function*(){}.constructor;
+const uuid_underscore = () => {
+  let s = crypto.randomUUID().replace(/-/g, "_")
+  return "a"+s.substring(1)
+}
+const callid_varname = uuid_underscore()
 
-// we will pass around reference typeinfos rather than the full information for two reasons:
-// 1. anything we see later with the same ref we want to update the types of everything else with that ref
-// 2. for cyclic objects it's easier to work with refs initially rather than try to unroll
-const function_typeinfo_map: WeakMap<Function, FunctionTI> = new WeakMap()
-const object_typeinfo_map: WeakMap<Object, ObjectTI> = new WeakMap()
+function make_expression_body(node: acorn.Function) {
+  const exp: acorn.Expression = node.body as acorn.Expression
+  node.expression = true;
+  node.body = {
+    type: "BlockStatement",
+    body: [{
+      type: "ReturnStatement",
+      argument: exp
+    } as acorn.ReturnStatement]
+  } as acorn.BlockStatement
+}
 
-function compute_typeinfo(t: any, refs?: WeakMap<any, TypeInfo>) {
-  if (refs === undefined) refs = new WeakMap()
-  switch (typeof t) {
-    case "object":
-      // null is a primitive even though it's an object
-      if (t === null) return new PrimitiveTI(null)
-      // if we've seen this reference before, make it circular
-      if (refs.has(t)) return refs.get(t)!
-      
-      // TODO: add cases for array, class, object without class, primitive classes vs. imported, etc 
-      return new ObjectTI(t, refs)
-    case "function":
-      return new FunctionRefTI(t)
-    default:
-      return new PrimitiveTI(t)
-  }
+function make_call_expression(logtype: "__logarg"|"__logret"|"__logyield"|"__logdelyield", params: acorn.Expression[]): acorn.CallExpression {
+  return {
+    type: "CallExpression",
+    callee: {
+      type: "MemberExpression",
+      object: {
+        type: "Identifier",
+        name: "global"
+      } as acorn.Identifier,
+      property: {
+        type: "Identifier",
+        name: logtype
+      } as acorn.Identifier,
+      computed: false,
+      optional: false
+    } as acorn.MemberExpression,
+    arguments: params,
+    optional: false
+  } as acorn.CallExpression
 }
-class TypeInfo {
-  type: "string"|"number"|"bigint"|"boolean"|"undefined"|"symbol"|"null"|"object"|"function"
-  constructor(t: any) {
-    this.type = typeof t
-  }
-  // toString is expected to work as a hash (and will be used in TraceSet)
-  // such that two identical TypeInfos produce the same value and two different
-  // ones produce a different value
-  toString(): string {
-    return this.type
-  }
-}
-class PrimitiveTI extends TypeInfo {
-  constructor(t: string|number|bigint|boolean|undefined|symbol|null) {
-    super(t)
-    // typeof null === "object" so we need to have this case
-    if (t === null) this.type = "null"
-  }
-}
-class FunctionRefTI extends TypeInfo {
-  ref: Function
-  constructor(t: Function) {
-    super(t)
-    this.ref = t
-    if (!function_typeinfo_map.has(t)) {
-      function_typeinfo_map.set(t, new FunctionTI(t))
+
+
+function instrument_body(node: acorn.Function, path: string) {
+
+  // we can make this type assertion because all expressions we've turned into bodies
+  if (node.body.type !== "BlockStatement")
+    throw new Error("Saw a non-block node type in function body")
+
+  const body: acorn.BlockStatement = node.body
+  const location = `${path}:${node.start}`
+  
+  const uuids = node.params.map(uuid_underscore)
+
+
+  // we need to handle array destructures seperately because we want to know
+  // 1. the types of all the named variables
+  // 2. the types of all the rest of the array, if it exists
+  // so we need to pass in everything to logarg
+  // 
+  // function dog([[a, b], ...c]) {}
+  // becomes
+  // function dog(<uuid>) {
+  //   let [[<uuid1>, <uuid2>, ...<uuid3>], ...<uuid4>] = <uuid>
+  //   let [[{ a, b }, b], c] = __logarg(<uuid1>, <uuid2>, <uuid3>, <uuid4>)
+  // }
+  const uuids_expanded: string[] = []
+  function visit_arrays(p: acorn.ArrayPattern, uuids: string[]): acorn.ArrayPattern {
+    let elems: (acorn.ArrayPattern | acorn.Identifier | acorn.RestElement)[] = []
+    for (const elem of p.elements) {
+      if (elem == null) continue
+      if (elem.type === "ArrayPattern") elems.push(visit_arrays(elem, uuids))
+      else {
+        let uuid = uuid_underscore()
+        uuids.push(uuid)
+        elems.push({
+          type: "Identifier",
+          name: uuid
+        } as acorn.Identifier)
+      }
     }
-  }
-  get location() {
-    return function_typeinfo_map.get(this.ref)!.location
-  }
-  get trace() {
-    return function_typeinfo_map.get(this.ref)!.trace
-  }
-  get uuid() {
-    return function_typeinfo_map.get(this.ref)!.uuid
-  }
-  toString() {
-    return this.uuid
-  }
-}
-class FunctionTI extends TypeInfo {
-  // TODO: it's probably bad to have this as a promise
-  // not sure yet how to resolve the async
-  location: Promise<Location|undefined>
-  trace?: Trace
-  uuid: string
-  constructor(t: Function) {
-    super(t)
-    this.uuid = crypto.randomUUID()
-    this.location = locate(t)
-  }
-}
-class ObjectTI extends TypeInfo {
-  params: Map<string, TypeInfo>
-  constructor(t: Object, refs: WeakMap<any, TypeInfo>) {
-    super(t)
-    this.params = new Map()
-
-    refs.set(t, this)
-    for (const key in Object.keys(t)) {
-      this.params.set(key, compute_typeinfo(t[key], refs))
+    // if the last one isn't a rest element we have to append a made-up rest element
+    // we'll have to take this into account when processing the destructured array as well
+    if (p.elements.length > 0 && p.elements[p.elements.length-1]?.type != "RestElement") {
+      let uuid = uuid_underscore()
+      uuids.push(uuid)
+      elems.push({
+        type: "RestElement",
+        argument: {
+          type: "Identifier",
+          name: uuid
+        } as acorn.Identifier
+      } as acorn.RestElement)
     }
+
+    return {
+      type: "ArrayPattern",
+      elements: elems
+    } as acorn.ArrayPattern
   }
   
-  // we can cache tostring because these are effectively frozen
-  #string_cached?: string
-  toString() {
-    if (this.#string_cached !== undefined) return this.#string_cached
-    
-    // first DFS through child objects to determine if ciruclar
-    // then compute string iwth <ref> and [Circular] like how console.log does it
-
-    const seen = new WeakSet()
-    const repeated: ObjectTI[] = []
-    function visit(obj: ObjectTI) {
-      if (seen.has(obj) && !repeated.includes(obj)) repeated.push(obj)
-      seen.add(obj)
-      for (const child of obj.params.values()) {
-        if (!(child instanceof ObjectTI)) continue
-        visit(child)
-      }
+  node.params.forEach((param, i) => {
+    if (param.type !== "ArrayPattern") {
+      uuids_expanded.push(uuids[i])
+      return
     }
-    visit(this)
-    
-    // construct the string, knowing the reference indices from `repeated`
-    // Since we're DFSing the first time we see a ref it should be the <ref *i>
-    // and all future times should be children annotated with [Circular *i]
-    const seen2 = new WeakSet()
-    function _toString(obj: ObjectTI) {
-      const params: string[] = []
-      for (const key of obj.params.keys()) {
-        const value = obj.params.get(key)!
-        if (!(value instanceof ObjectTI)) {
-          params.push(`${key}:${value}`)
-          continue
-        }
 
-        // if this isn't circular we're good
-        let idx = repeated.indexOf(value)
-        if (idx === -1) {
-          params.push(`${key}:${_toString(value)}`)
-        }
-        
-        // if it is circular and it's the first time we're seeing this, <ref *i>
-        else if (!seen2.has(value)) {
-          seen2.add(value)
-          params.push(`${key}:<ref *${idx}>${_toString(value)}`)
-        }
+    // push to body a destructure statement and construct our uuids_expanded
+    let assignee = visit_arrays(param, uuids_expanded)
 
-        // otherwise we're circular
-        else {
-          params.push(`${key}:<Circular *${idx}>`)
-        }
-      }
-      return `{${params.join(",")}}`
-    }
-    
-    this.#string_cached = _toString(this)
-    return this.#string_cached
-  }
+    // add an assignment to the body, left = uuid
+    body.body.unshift({
+      type: "VariableDeclaration",
+      declarations: [
+        {
+          type: "VariableDeclarator",
+          id: assignee,
+          init: {
+            type: "Identifier",
+            name: uuids[i]
+          } as acorn.Identifier
+        } as acorn.VariableDeclarator
+      ],
+      kind: "let",
+    } as acorn.VariableDeclaration)
+  })
+
+  // add the destructuring statements to the body
+  // those are the let [[<uuid1>, <uuid2>, ...<uuid3>], ...<uuid4>] = <uuid>
   
-}
-
-class Trace {
-  args: TypeInfo[]
-  yields: TypeInfo[]
-  returns: TypeInfo
-  constructor(args: any[]) {
-    // TODO: can we do this computation in a worker thread so collecting traces isn't blocking
-    this.args = args.map(a => compute_typeinfo(a))
-    this.yields = []
-    this.returns = new PrimitiveTI(undefined)
-  }
-  toString() {
-    return `[${this.args.join(",")}],[${this.yields.join(",")}],${this.returns}`
-  }
-}
-
-class TraceSet {
-  traces: Trace[]
-  traceset: Set<string>
-
-  constructor() {
-    this.traces = []
-    this.traceset = new Set()
-  }
-
-  add(trace: Trace) {
-    const trace_s = trace.toString()
-    if (this.traceset.has(trace_s)) return
-    this.traceset.add(trace_s)
-    this.traces.push(trace)
-  }
-
-  has(trace: Trace) {
-    return this.traceset.has(trace.toString())
-  }
-}
-
-
-const inflight: Record<string, Trace> = {}
-const calls: Record<string, TraceSet> = {}
-
-// TODO: actually implement
-function shouldprofile(_loc: string): boolean {
-  return true
-}
-
-global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...any[]] {
-  if (!shouldprofile(loc)) return [undefined, ...args]
-  
-  const callid = crypto.randomUUID()
-  inflight[callid] = new Trace(args)
-
-  // wrap all of our arguments that are functions
-  args = args.map(arg => {
-    if (typeof arg !== "function") return arg
-    
-    // at this point we've created the typeinfo so we
-    // should already be in the function_typeinfo_map
-    const fti = function_typeinfo_map.get(arg)!
-    const wrapped = function(...args: any[]) {
-      fti.trace = new Trace(args)
-      const res = arg(...args)
-
-      // if we're not a generator just profile the return
-      if (typeof res !== "object" || res.constructor !== GeneratorFunction) {
-        fti.trace.returns = compute_typeinfo(res)
-        return res
-      }
-
-      // otherwise we have to wrap the generator in the same way
-      const _next = res.next
-      res.next = function(...b: any[]) {
-        const next: { value: any, done?: boolean } = _next(...b)
-        if (!next.done) fti.trace!.yields.push(compute_typeinfo(next.value))
-        else fti.trace!.returns = compute_typeinfo(next.value)
-        return next
-      }
-      return res
-    }
-
-    function_typeinfo_map.set(wrapped, fti)
+  // destructure patterns should have the original patterns
+  // this is the part that goes on the left half of the assignment, in [param1, param2]
+  const destructure_patterns: acorn.Pattern[] = node.params.map(a => {
+    if (a.type == "AssignmentPattern") return a.left
+    return a
   })
   
-  return [callid, ...args]
-}
+  // right hand of the assignment, __logarg(...uuids)
+  // we want to expand the uuids of array destructures
+  body.body.unshift({
+    type: "VariableDeclaration",
+    kind: "let",
+    declarations: [{
+      type: "VariableDeclarator",
+      id: {
+        type: "ArrayPattern",
+        elements: [
+          {
+            type: "Identifier",
+            name: callid_varname
+          } as acorn.Identifier,
+          ...destructure_patterns
+        ]
+      } as acorn.ArrayPattern,
+      init: make_call_expression("__logarg", [
+        {
+          type: "Literal",
+          value: location,
+          raw: `"${location}"`
+        } as acorn.Literal,
+        ...uuids_expanded.map(a => ({ type: "Identifier", name: a } as acorn.Identifier))
+      ])
+    } as acorn.VariableDeclarator]
+  } as acorn.VariableDeclaration)
 
-global.__logret = function(loc: string, callid: string|undefined, val?: any): any|undefined {
-  if (callid === undefined) return val
+  // update the params
+  node.params = node.params.map((a, i) => {
+    if (a.type == "AssignmentPattern") return {
+      type: "AssignmentPattern",
+      left: {
+        type: "Identifier",
+        name: uuids[i]
+      } as acorn.Identifier,
+      right: a.right
+    } as acorn.AssignmentPattern
+
+    return {
+      type: "Identifier",
+      name: uuids[i]
+    } as acorn.Identifier
+  })
   
-  // bank inflight[callid], cleanup
-  inflight[callid].returns = compute_typeinfo(val)
-  if (calls[loc] === undefined) calls[loc] = new TraceSet()
-  calls[loc].add(inflight[callid])
-  delete inflight[callid]
+  // annotate yields and returns but cease annotating if we see an inner function
+  walk.recursive(body, undefined, {
+    // do nothing when we see a function
+    Function: () => {},
 
-  return val
-}
+    ReturnStatement(node: acorn.ReturnStatement, _state, _callback) {
+      const arg = node.argument ?? {
+        type: "Identifier",
+        name: "undefined"
+      } as acorn.Identifier
+      node.argument = make_call_expression("__logret", [
+        {
+          type: "Literal",
+          value: location,
+          raw: `"${location}"`
+        } as acorn.Literal,
+        {
+          type: "Identifier",
+          name: callid_varname,
+        } as acorn.Identifier,
+        arg
+      ])
+    },
+    YieldExpression(node: acorn.YieldExpression, _state, _callback) {
+      const arg = node.argument ?? {
+        type: "Identifier",
+        name: "undefined"
+      } as acorn.Identifier
+      // we also have delegate, yield* Iterator which we have to handle
+      // TODO lol
+      node.argument = make_call_expression(node.delegate ? "__logdelyield" : "__logyield", [
+        {
+          type: "Identifier",
+          name: callid_varname,
+        } as acorn.Identifier,
+        arg
+      ])
+    }
+  })
 
-global.__logyield = function(callid: string|undefined, val: any): any {
-  if (callid === undefined) return val
-  
-  inflight[callid].yields.push(compute_typeinfo(val))
-  return val
-}
-
-// delegated yield, wrap the iterator
-global.__logdelyield = function<T>(callid: string|undefined, val: Generator<T>): Generator<T> {
-  if (callid === undefined) return val
-
-  const _next = val.next
-  val.next = function(...a) {
-    const next: { value: T, done?: boolean } = _next(...a)
-    if (!next.done) inflight[callid].yields.push(compute_typeinfo(next.value))
-    else inflight[callid].returns = compute_typeinfo(next.value)
-    return next
+  // if the last element of the body isn't a return statement, add one
+  // this could be unreachable if there's an exhaustive branch but this doesn't add much overhead
+  if (body.body[body.body.length-1].type !== "ReturnStatement") {
+    body.body.push({
+      type: "ReturnStatement",
+      argument: make_call_expression("__logret", [
+        {
+          type: "Literal",
+          value: location,
+          raw: `"${location}"`
+        } as acorn.Literal,
+        {
+          type: "Identifier",
+          name: callid_varname,
+        } as acorn.Identifier,
+        {
+          type: "Identifier",
+          name: "undefined"
+        } as acorn.Identifier,
+      ])
+    } as acorn.ReturnStatement)
   }
-  return val
 }
 
-process.on("beforeExit", () => {
-  // can schedule async tasks if I feel like it
-  console.log(calls)
-})
+export const filenames: string[] = []
+export function instrument(source: string, path: string): string {
+  filenames.push(path)
+  const ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "module" })
+
+  walk.simple(ast, {
+    Function(node: acorn.Function) {
+      // if we have an expression function, give it a body so we can add instrumentation
+      if (node.expression) make_expression_body(node)
+
+      // add profiling for args, returns, yeilds
+      instrument_body(node, path)
+    },
+    // AssignmentExpression(node: acorn.AssignmentExpression) {
+      // profile assignments too?
+    // }
+    
+  })
+  
+  return astring.generate(ast)
+}
+
+
+
+
+
+
