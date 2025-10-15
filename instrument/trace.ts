@@ -1,7 +1,5 @@
-import { Trace, TraceSet, compute_typeinfo, function_typeinfo_map } from "../typeinfo/types.ts"
-
-// generator constructor for detecting if object is generator
-const GeneratorFunction = function*(){}.constructor;
+import { Trace, TraceSet, compute_typeinfo, function_typeinfo_map, ObjectTI } from "../typeinfo/types.ts"
+import { ObjectFunction, GeneratorFunction } from "../typeinfo/constructor_library.ts"
 
 const inflight: Record<string, Trace> = {}
 export const calls: Record<string, TraceSet> = {}
@@ -11,28 +9,20 @@ function shouldprofile(_loc: string): boolean {
   return true
 }
 
-global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...any[]] {
-  if (!shouldprofile(loc)) return [undefined, ...args]
-  
-  const callid = crypto.randomUUID()
-  inflight[callid] = new Trace(args)
 
-  // wrap all of our arguments that are functions
-  args = args.map(arg => {
-    if (typeof arg !== "function") return arg
-
+function wrap_function(f: Function): Function {
     // if we've already wrapped/are profiling this function, ignore
-    if (function_typeinfo_map.has(arg)) return arg
+    if (function_typeinfo_map.has(f)) return f
     
     // at this point we've created the typeinfo so we
     // should already be in the function_typeinfo_map
-    const fti = function_typeinfo_map.get(arg)!
+    const fti = function_typeinfo_map.get(f)!
     const wrapped = function(...args: any[]) {
       fti.trace = new Trace(args)
-      const res = arg(...args)
+      const res = f(...args)
 
       // if we're not a generator just profile the return
-      if (typeof res !== "object" || res.constructor !== GeneratorFunction) {
+      if (typeof res !== "object" || res instanceof GeneratorFunction) {
         fti.trace.returns = compute_typeinfo(res)
         return res
       }
@@ -49,6 +39,43 @@ global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...a
     }
 
     function_typeinfo_map.set(wrapped, fti)
+    return wrapped
+}
+
+function wrap_object(o: Object, oti: ObjectTI): Object {
+  return new Proxy(o, {
+    get(t: Object, p: string|symbol, reciever: any) {
+      // if oti.params[p]
+
+      
+      // oti.params[p] =
+
+      return Reflect.get(t, p, reciever)
+    }
+  })
+}
+
+
+
+
+
+
+
+global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...any[]] {
+  if (!shouldprofile(loc)) return [undefined, ...args]
+  
+  const callid = crypto.randomUUID()
+  inflight[callid] = new Trace(args)
+
+  // wrap all of our arguments as needed
+  args = args.map((arg, i) => {
+    if (typeof arg === "function") return wrap_function(arg)
+    if (typeof arg === "object" && arg !== null) {
+      // we wanna wrap objects whose constructor is ``object''
+      // TODO: do something about classes
+      if (Object.getPrototypeOf(arg).constructor === ObjectFunction) return wrap_object(arg, inflight[called].args[i])
+    }
+    return arg
   })
   
   return [callid, ...args]

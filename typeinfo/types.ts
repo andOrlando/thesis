@@ -1,11 +1,13 @@
-import locate from "../utils/function_location.ts"
+import ts from "typescript"
+
+import { locate } from "../utils/function_location.ts"
 import type { Location } from "../utils/function_location.ts"
+import { ObjectFunction } from "./constructor_library.ts"
+import { combine_types } from "./combine.ts"
 
 // references linked to a FunctionTI
 export const function_typeinfo_map: WeakMap<Function, FunctionTI> = new WeakMap()
 
-// object constructor
-const ObjectFunction = Object.getPrototypeOf({}).constructor
 
 export function compute_typeinfo(t: any, refs?: WeakMap<any, TypeInfo>) {
   if (refs === undefined) refs = new WeakMap()
@@ -34,7 +36,8 @@ export function compute_typeinfo(t: any, refs?: WeakMap<any, TypeInfo>) {
 
 export interface TypeInfo {
   type: string
-  toString: () => string
+  toUnique: () => string
+  toAst: () => ts.TypeNode
 }
 
 export class PrimitiveTI implements TypeInfo {
@@ -44,8 +47,37 @@ export class PrimitiveTI implements TypeInfo {
     // typeof null === "object" so we need to have this case
     if (t === null) this.type = "null"
   }
-  toString() {
+  toUnique() {
     return this.type
+  }
+  toAst() {
+    let kind: number
+    switch (this.type) {
+      case "string":
+        kind = ts.SyntaxKind.StringKeyword
+        break
+      case "number":
+        kind = ts.SyntaxKind.NumberKeyword
+        break
+      case "bigint":
+        kind = ts.SyntaxKind.BigIntKeyword
+        break
+      case "boolean":
+        kind = ts.SyntaxKind.BooleanKeyword
+        break
+      case "undefined":
+        kind = ts.SyntaxKind.UndefinedKeyword
+        break
+      case "symbol":
+        throw new Error("TODO: what's the kind for a symbol")
+      case "null":
+        kind = ts.SyntaxKind.NullKeyword
+        break
+      default:
+        throw new Error("unreachable")
+    }
+
+    return ts.factory.createKeywordTypeNode(kind)
   }
 }
 export class FunctionRefTI implements TypeInfo {
@@ -66,8 +98,11 @@ export class FunctionRefTI implements TypeInfo {
   get uuid() {
     return function_typeinfo_map.get(this.ref)!.uuid
   }
-  toString() {
+  toUnique() {
     return this.uuid
+  }
+  toAst() {
+    return function_typeinfo_map.get(this.ref)!.toAst()
   }
 }
 export class FunctionTI implements TypeInfo {
@@ -81,8 +116,13 @@ export class FunctionTI implements TypeInfo {
     this.uuid = crypto.randomUUID()
     this.location = locate(t)
   }
-  toString() {
+  toUnique() {
     return this.uuid
+  }
+  toAst() {
+    
+    throw new Error("TODO: implement")
+    return ts.factory.createFunctionTypeNode(undefined, [], ts.factory.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword))
   }
 }
 
@@ -101,7 +141,7 @@ export class ObjectTI implements TypeInfo {
   
   // we can cache tostring because these are effectively frozen
   #string_cached?: string
-  toString() {
+  toUnique() {
     if (this.#string_cached !== undefined) return this.#string_cached
     
     // first DFS through child objects to determine if ciruclar
@@ -128,7 +168,7 @@ export class ObjectTI implements TypeInfo {
     const seen2: WeakSet<ObjectTI> = new WeakSet([this])
 
     // arrow function because we need to preserve `this`
-    const _toString = (obj: ObjectTI) => {
+    const _toUnique = (obj: ObjectTI) => {
       const params: string[] = []
       for (const key of obj.params.keys()) {
         const value = obj.params.get(key)!
@@ -140,13 +180,13 @@ export class ObjectTI implements TypeInfo {
         // if this isn't circular we're good
         let idx = repeated.indexOf(value)
         if (idx === -1) {
-          params.push(`${key}:${_toString(value)}`)
+          params.push(`${key}:${_toUnique(value)}`)
         }
         
         // if it is circular and it's the first time we're seeing this, <ref *i>
         else if (!seen2.has(value)) {
           seen2.add(value)
-          params.push(`${key}:<ref *${idx}>${_toString(value)}`)
+          params.push(`${key}:<ref *${idx}>${_toUnique(value)}`)
         }
 
         // otherwise we're circular
@@ -161,19 +201,26 @@ export class ObjectTI implements TypeInfo {
       return res
     }
     
-    this.#string_cached = _toString(this)
+    this.#string_cached = _toUnique(this)
     return this.#string_cached
   }
 
+  toAst() {
 
-  combine(o: ObjectTI): TypeInfo {
-    // if we can determine that either this or the others' properties are a subset
-    // then we can combine into one thing, types still have to match for a subset
+    let seen = new WeakSet<Object>()
+    function _toAst(node: ObjectTI) {
+      return ts.factory.createTypeLiteralNode([...node.params.entries()].map(([key, valueti]: [string, TypeInfo]): ts.TypeElement => {
+        if (valueti instanceof ObjectTI) {
+          if (seen.has(valueti)) return ts.factory.createPropertySignature(undefined, key, undefined, ts.factory.createKeywordTypeNode(ts.SyntaxKind.ObjectKeyword))
+          seen.add(valueti)
+          return ts.factory.createPropertySignature(undefined, key, undefined, _toAst(valueti))
+        }
+        
+        return ts.factory.createPropertySignature(undefined, key, undefined, valueti.toAst())
+      }))
+    }
 
-
-
-    
-    return this
+    return _toAst(this)
   }
 
 
@@ -187,6 +234,12 @@ export class ArrayTI implements TypeInfo {
   constructor(t: any[], refs: WeakMap<any, TypeInfo>) {
     this.elemtypes = t.map(a => compute_typeinfo(a, refs))
   }
+  toUnique() {
+    return `(${this.elemtypes.map(a => a.toUnique()).join("|")})[]`
+  }
+  toAst() {
+    return ts.factory.createArrayTypeNode(combine_types(this.elemtypes).toAst())
+  }
 }
 
 // special case of ObjectTI where we accumulate with respect to
@@ -195,21 +248,33 @@ export class ArrayTI implements TypeInfo {
 export class ClassTI implements TypeInfo {
   type: "class"
   location: Promise<Location|undefined>
+  name: string
   constructor(t: Object) {
     this.location = locate(Object.getPrototypeOf(t).constructor)
+    this.name = t.constructor.name
+  }
+  toUnique() {
+    return this.toString()
+  }
+  toAst() {
+    return ts.factory.createTypeReferenceNode(this.name, [])
   }
 }
 
 
 
 export class UnionTI implements TypeInfo {
-  types: TypeInfo[]
+  types: TypeInfoSet
   type: "union"
   constructor(types: TypeInfo[]) {
-    this.types = types
+    this.types = new TypeInfoSet()
+    types.forEach(t => this.types.add(t))
   }
-  toString() {
-    return this.types.join("|")
+  toUnique() {
+    return [...this.types.typeset].join("|")
+  }
+  toAst() {
+    return ts.factory.createUnionTypeNode(this.types.types.map(a => a.toAst()))
   }
 }
 
@@ -226,7 +291,7 @@ export class Trace {
     this.yields = []
     this.returns = new PrimitiveTI(undefined)
   }
-  toString() {
+  toUnique() {
     return `[${this.args.join(",")}],[${this.yields.join(",")}],${this.returns}`
   }
 }
@@ -241,18 +306,41 @@ export class TraceSet {
   }
 
   add(trace: Trace) {
-    const trace_s = trace.toString()
+    const trace_s = trace.toUnique()
     if (this.traceset.has(trace_s)) return
     this.traceset.add(trace_s)
     this.traces.push(trace)
   }
 
   has(trace: Trace) {
-    return this.traceset.has(trace.toString())
+    return this.traceset.has(trace.toUnique())
   }
 }
 
 
+export class TypeInfoSet {
+  types: TypeInfo[]
+  typeset: Set<string>
+  constructor() {
+    this.types = []
+    this.typeset = new Set()
+  }
+  add(type: TypeInfo) {
+    const type_s = type.toUnique()
+    if (this.typeset.has(type_s)) return
+    this.typeset.add(type_s)
+    this.types.push(type)
+  }
+  remove(type: TypeInfo) {
+    const type_s = type.toUnique()
+    if (!this.typeset.has(type_s)) return
+    this.typeset.delete(type_s)
+    this.types = this.types.filter(a => a.toUnique() !== type_s)
+  }
+  has(type: TypeInfo) {
+    return this.typeset.has(type.toUnique())
+  }
+}
 
 
 

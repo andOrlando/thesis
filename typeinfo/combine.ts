@@ -1,17 +1,38 @@
-import { TypeInfo, Trace, UnionTI } from "./types.ts"
+import { Trace, UnionTI, PrimitiveTI } from "./types.ts"
+import type { TypeInfo } from "./types.ts"
 
 
 //TODO: implement
-function combine_traces(traces: Trace[]): Trace {
-  return traces[0]
+export function combine_traces(traces: Trace[]): Trace {
+  // TODO: do generics
+  
+  // otherwise try to combine types in a trace
+  let result = new Trace([])
+  let maxargs = Math.max(...traces.map(t => t.args.length))
+
+  for (let i=0; i<maxargs; i++) {
+    result.args.push(combine_types(traces.map(t => t.args[i] ?? new PrimitiveTI(undefined))))
+  }
+  result.yields.push(combine_types(traces.map(t => combine_types(t.yields))))
+  result.returns = combine_types(traces.map(t => t.returns))
+
+  return result
 }
 
 
 // TODO: implement
-function combine_types(types: TypeInfo[]): TypeInfo {
-  if (types.length === 1) return types[0]
+export function combine_types(types: TypeInfo[]): TypeInfo {
+  if (types.length == 0) return new PrimitiveTI(undefined)
+  let first = types[0].toString()
+  if (types.every(a => first === a.toString())) return types[0]
   
-  return new UnionTI(types)
+  let union_types: TypeInfo[] = []
+  types.forEach(t => {
+    if (t instanceof UnionTI) union_types.concat(t.types.types)
+    else union_types.push(t)
+  })
+
+  return new UnionTI(union_types)
 }
 
 

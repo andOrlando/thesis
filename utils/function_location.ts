@@ -11,7 +11,7 @@ export type Location = {
   location: string
 }
 
-export default async function locate(f: Function): Promise<Location|undefined> {
+export async function locate(f: Function): Promise<Location|undefined> {
   let fid = crypto.randomUUID()
   
   global[PREFIX][fid] = f
