@@ -84,6 +84,7 @@ export class FunctionRefTI implements TypeInfo {
   type: "functionref"
   ref: Function
   constructor(t: Function) {
+    this.type = "functionref"
     this.ref = t
     if (!function_typeinfo_map.has(t)) {
       function_typeinfo_map.set(t, new FunctionTI(t))
@@ -113,6 +114,7 @@ export class FunctionTI implements TypeInfo {
   uuid: string
   type: "function"
   constructor(t: Function) {
+    this.type = "function"
     this.uuid = crypto.randomUUID()
     this.location = locate(t)
   }
@@ -128,9 +130,9 @@ export class FunctionTI implements TypeInfo {
 
 export class ObjectTI implements TypeInfo {
   params: Map<string, TypeInfo>
-  type: string
+  type: "object"
   constructor(t: Object, refs: WeakMap<any, TypeInfo>) {
-    this.type = typeof t
+    this.type = "object"
     this.params = new Map()
 
     refs.set(t, this)
@@ -173,7 +175,7 @@ export class ObjectTI implements TypeInfo {
       for (const key of obj.params.keys()) {
         const value = obj.params.get(key)!
         if (!(value instanceof ObjectTI)) {
-          params.push(`${key}:${value}`)
+          params.push(`${key}:${value.toUnique()}`)
           continue
         }
 
@@ -229,9 +231,10 @@ export class ObjectTI implements TypeInfo {
 
 // TODO: not finished
 export class ArrayTI implements TypeInfo {
-  type: "array"
   elemtypes: TypeInfo[]
+  type: "array"
   constructor(t: any[], refs: WeakMap<any, TypeInfo>) {
+    this.type = "array"
     this.elemtypes = t.map(a => compute_typeinfo(a, refs))
   }
   toUnique() {
@@ -246,10 +249,11 @@ export class ArrayTI implements TypeInfo {
 // the function hash in a WeakMap, similar to what we do for functions
 // TODO: not finished
 export class ClassTI implements TypeInfo {
-  type: "class"
   location: Promise<Location|undefined>
   name: string
+  type: "class"
   constructor(t: Object) {
+    this.type = "class"
     this.location = locate(Object.getPrototypeOf(t).constructor)
     this.name = t.constructor.name
   }
@@ -267,6 +271,7 @@ export class UnionTI implements TypeInfo {
   types: TypeInfoSet
   type: "union"
   constructor(types: TypeInfo[]) {
+    this.type = "union"
     this.types = new TypeInfoSet()
     types.forEach(t => this.types.add(t))
   }
@@ -292,7 +297,7 @@ export class Trace {
     this.returns = new PrimitiveTI(undefined)
   }
   toUnique() {
-    return `[${this.args.join(",")}],[${this.yields.join(",")}],${this.returns}`
+    return `[${this.args.map(a => a.toUnique()).join(",")}],[${this.yields.map(a => a.toUnique()).join(",")}],${this.returns.toUnique()}`
   }
 }
 

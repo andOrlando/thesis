@@ -13,7 +13,10 @@ export function combine_traces(traces: Trace[]): Trace {
   for (let i=0; i<maxargs; i++) {
     result.args.push(combine_types(traces.map(t => t.args[i] ?? new PrimitiveTI(undefined))))
   }
-  result.yields.push(combine_types(traces.map(t => combine_types(t.yields))))
+  // if we have yields, combine them
+  if (traces.reduce((sum, a) => sum + a.yields.length, 0) > 0) {
+    result.yields.push(combine_types(traces.map(t => combine_types(t.yields))))
+  }
   result.returns = combine_types(traces.map(t => t.returns))
 
   return result
@@ -23,8 +26,8 @@ export function combine_traces(traces: Trace[]): Trace {
 // TODO: implement
 export function combine_types(types: TypeInfo[]): TypeInfo {
   if (types.length == 0) return new PrimitiveTI(undefined)
-  let first = types[0].toString()
-  if (types.every(a => first === a.toString())) return types[0]
+  let first = types[0].toUnique()
+  if (types.every(a => first === a.toUnique())) return types[0]
   
   let union_types: TypeInfo[] = []
   types.forEach(t => {

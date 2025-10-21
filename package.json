@@ -20,7 +20,7 @@
     "acorn-walk": "^8.3.4",
     "astring": "^1.9.0",
     "dedent-js": "^1.0.1",
-    "ts-morph": "^27.0.0",
+    "ts-morph": "^27.0.2",
     "typescript": "^5.9.2"
   },
   "type": "module"

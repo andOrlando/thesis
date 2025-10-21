@@ -1,6 +1,8 @@
 import { instrument } from "./instrument.ts"
 import type { Module } from "node:module"
+import { postprocess } from "../postprocess/postprocess.ts"
 
+const filenames: string[] = []
 export async function load(
   url: string,
   context: Module.LoadHookContext,
@@ -15,12 +17,16 @@ export async function load(
   // no node_modules
   if (url.includes("node_modules")) return loaded
 
-  loaded.source = instrument(String(loaded.source), url.substring(7))
+  let fname = url.substring(7)
+  loaded.source = instrument(String(loaded.source), fname)
+  filenames.push(fname)
 
   return loaded
 }
 
-
+process.on("beofreExit", () => {
+  postprocess(filenames)
+})
 
 
 

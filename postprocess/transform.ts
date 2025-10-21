@@ -44,7 +44,9 @@ const transformer = <T extends ts.Node>(context: ts.TransformationContext) => (r
           ))
         }
         
-        const newreturn = trace.returns.toAst()
+
+        const newreturn = trace.returns.type !== "undefined" ? trace.returns.toAst() : undefined
+        
         
         if (ts.isFunctionDeclaration(node))
           return ts.factory.updateFunctionDeclaration(node,
@@ -115,7 +117,7 @@ export function transform(filename: string) {
   let source = ts.createSourceFile(filename, readFileSync(filename).toString(), ts.ScriptTarget.ES2024)
   let res = ts.transform(source, [transformer])
 
-  console.log(printer.printFile(res.transformed[0] as ts.SourceFile))
+  return printer.printFile(res.transformed[0] as ts.SourceFile)
   
 }
 

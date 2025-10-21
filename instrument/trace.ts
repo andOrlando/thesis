@@ -73,7 +73,7 @@ global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...a
     if (typeof arg === "object" && arg !== null) {
       // we wanna wrap objects whose constructor is ``object''
       // TODO: do something about classes
-      if (Object.getPrototypeOf(arg).constructor === ObjectFunction) return wrap_object(arg, inflight[called].args[i])
+      if (Object.getPrototypeOf(arg).constructor === ObjectFunction) return wrap_object(arg, inflight[callid].args[i] as ObjectTI)
     }
     return arg
   })
@@ -83,7 +83,7 @@ global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...a
 
 global.__logret = function(loc: string, callid: string|undefined, val?: any): any|undefined {
   if (callid === undefined) return val
-  
+
   // bank inflight[callid], cleanup
   inflight[callid].returns = compute_typeinfo(val)
   if (calls[loc] === undefined) calls[loc] = new TraceSet()

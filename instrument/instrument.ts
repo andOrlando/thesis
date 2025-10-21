@@ -100,7 +100,7 @@ function instrument_body(node: acorn.Function, path: string) {
     } as acorn.ArrayPattern
   }
   
-  node.params.forEach((param, i) => {
+  let destructure_assignments = node.params.map((param, i) => {
     if (param.type !== "ArrayPattern") {
       uuids_expanded.push(uuids[i])
       return
@@ -110,7 +110,7 @@ function instrument_body(node: acorn.Function, path: string) {
     let assignee = visit_arrays(param, uuids_expanded)
 
     // add an assignment to the body, left = uuid
-    body.body.unshift({
+    return {
       type: "VariableDeclaration",
       declarations: [
         {
@@ -123,7 +123,7 @@ function instrument_body(node: acorn.Function, path: string) {
         } as acorn.VariableDeclarator
       ],
       kind: "let",
-    } as acorn.VariableDeclaration)
+    } as acorn.VariableDeclaration
   })
 
   // add the destructuring statements to the body
@@ -163,6 +163,8 @@ function instrument_body(node: acorn.Function, path: string) {
       ])
     } as acorn.VariableDeclarator]
   } as acorn.VariableDeclaration)
+
+  destructure_assignments.forEach(a => a ? body.body.unshift(a) : undefined)
 
   // update the params
   node.params = node.params.map((a, i) => {
@@ -245,9 +247,7 @@ function instrument_body(node: acorn.Function, path: string) {
   }
 }
 
-export const filenames: string[] = []
 export function instrument(source: string, path: string): string {
-  filenames.push(path)
   const ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "module" })
 
   walk.simple(ast, {

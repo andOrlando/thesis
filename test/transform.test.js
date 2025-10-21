@@ -68,7 +68,8 @@ describe("transform_acorn", () => {
     const res = instrument("function dog([a, b]) {}", "file")
     assert.match(res.trim(), litd`
     function dog(${uuid}) {
-      let [${uuid}, [a, b]] = global.__logarg("file:0", ${uuid});
+      let [${uuid}, ${uuid}, ...${uuid}] = ${uuid};
+      let [${uuid}, [a, b]] = global.__logarg("file:0", ${uuid}, ${uuid}, ${uuid});
       return global.__logret("file:0", ${uuid}, undefined);
     }`)
   })
@@ -86,7 +87,8 @@ describe("transform_acorn", () => {
     const res = instrument("function dog([a, [b, c]]) {}", "file")
     assert.match(res.trim(), litd`
     function dog(${uuid}) {
-      let [${uuid}, [a, [b, c]]] = global.__logarg("file:0", ${uuid});
+      let [${uuid}, [${uuid}, ${uuid}, ...${uuid}], ...${uuid}] = ${uuid};
+      let [${uuid}, [a, [b, c]]] = global.__logarg("file:0", ${uuid}, ${uuid}, ${uuid}, ${uuid}, ${uuid});
       return global.__logret("file:0", ${uuid}, undefined);
     }`)
   })
