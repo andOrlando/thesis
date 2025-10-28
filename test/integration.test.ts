@@ -31,7 +31,7 @@ describe("basic integration tests", () => {
   it("should handle objects", () => {
     let [out, _] = run_self(dedent(`
     function f(a) { return }
-    f({a: 1});`))
+    f({a: 1})`))
     
     assert.equal(out.split("\n")[1], "function f(a: { a: number }) { return }")
   })
@@ -40,7 +40,7 @@ describe("basic integration tests", () => {
     let [out, _] = run_self(dedent(`
     function f(a) { return }
     f(1);
-    f("a");`))
+    f("a")`))
 
     assert.equal(out.split("\n")[1], "function f(a: number|string) { return }")
   })
@@ -48,10 +48,36 @@ describe("basic integration tests", () => {
   it("should handle arrays", () => {
     let [out, _] = run_self(dedent(`
     function f(a) { return }
-    f([1, 2, 3]);`))
+    f([1, 2, 3])`))
 
     assert.equal(out.split("\n")[1], "function f(a: number[]) { return }")
-    
+  })
+
+  it("should handle generators", () => {
+    let [out, _] = run_self(dedent(`
+    function* f() { yield 3; return "hi" }
+    for (const a of f()) {}
+    `))
+
+    assert.equal(out.split("\n")[1], `function* f(): Generator<number, string> { yield 3; return "hi" }`)
+  })
+
+  it("should handle generators without returns", () => {
+    let [out, _] = run_self(dedent(`
+    function* f() { yield 3 }
+    for (const a of f()) {}
+    `))
+
+    assert.equal(out.split("\n")[1], `function* f(): Generator<number> { yield 3 }`)
+  })
+
+  it("should handle delegated generators", () => {
+    let [out, _] = run_self(dedent(`
+    function* f() { yield* [1, 2, 3] }
+    for (const a of f()) {}
+    `))
+
+    assert.equal(out.split("\n")[1], `function* f(): Generator<number> { yield* [1, 2, 3] }`)
   })
   
 })

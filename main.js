@@ -1,17 +1,8 @@
 
 
 
-   
-
-function f(a) {
-
-
-  let a2={"e":        5}
-
-
-
-  return;
+function* f() {
+  yield* [1, 2, 3]
 }
-f({a: 5})
 
-
+for (const a of f()) { console.log(a) }

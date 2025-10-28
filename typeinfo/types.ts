@@ -37,7 +37,7 @@ export function compute_typeinfo(t: any, refs?: WeakMap<any, TypeInfo>) {
 export interface TypeInfo {
   type: string
   toUnique: () => string
-  toAst: () => ts.TypeNode
+  // toAst: () => ts.TypeNode
   toTypeString: (indentation: string, level: number) => string
 }
 
@@ -106,11 +106,8 @@ export class FunctionRefTI implements TypeInfo {
   toUnique() {
     return this.uuid
   }
-  toAst() {
-    return function_typeinfo_map.get(this.ref)!.toAst()
-  }
-  toTypeString() {
-    return function_typeinfo_map.get(this.ref)!.toTypeString()
+  toTypeString(text: string, level: number) {
+    return function_typeinfo_map.get(this.ref)!.toTypeString(text, level)
   }
 }
 export class FunctionTI implements TypeInfo {
@@ -131,11 +128,6 @@ export class FunctionTI implements TypeInfo {
   }
   toUnique() {
     return this.uuid
-  }
-  toAst() {
-    
-    throw new Error("TODO: implement")
-    return ts.factory.createFunctionTypeNode(undefined, [], ts.factory.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword))
   }
   toTypeString(text: string, level: number) {
     // if it hasn't been called, just return Function
@@ -233,24 +225,6 @@ export class ObjectTI implements TypeInfo {
     return this.#string_cached
   }
 
-  toAst() {
-
-    let seen = new WeakSet<Object>()
-    function _toAst(node: ObjectTI) {
-      return ts.factory.createTypeLiteralNode([...node.params.entries()].map(([key, valueti]: [string, TypeInfo]): ts.TypeElement => {
-        if (valueti instanceof ObjectTI) {
-          if (seen.has(valueti)) return ts.factory.createPropertySignature(undefined, key, undefined, ts.factory.createKeywordTypeNode(ts.SyntaxKind.ObjectKeyword))
-          seen.add(valueti)
-          return ts.factory.createPropertySignature(undefined, key, undefined, _toAst(valueti))
-        }
-        
-        return ts.factory.createPropertySignature(undefined, key, undefined, valueti.toAst())
-      }))
-    }
-
-    return _toAst(this)
-  }
-
   toTypeString(text: string, level: number) {
     let seen = new WeakSet<Object>()
     function _toTypeString(node: ObjectTI, level: number) {
@@ -303,9 +277,6 @@ export class ArrayTI implements TypeInfo {
   toUnique() {
     return `(${this.elemtypes.map(a => a.toUnique()).join("|")})[]`
   }
-  toAst() {
-    return ts.factory.createArrayTypeNode(combine_types(this.elemtypes).toAst())
-  }
   toTypeString(text: string, level: number) {
     let type = combine_types(this.elemtypes)
     if (type instanceof ArrayTI || type instanceof PrimitiveTI) return `${type.toTypeString(text, level)}[]`
@@ -315,7 +286,8 @@ export class ArrayTI implements TypeInfo {
 
 // special case of ObjectTI where we accumulate with respect to
 // the function hash in a WeakMap, similar to what we do for functions
-// TODO: not finished
+// TODO: add type params
+// TODO: somehow tell thing to import it and generate .ts.d if not existing
 export class ClassTI implements TypeInfo {
   location: Promise<Location|undefined>
   name: string
@@ -349,9 +321,6 @@ export class UnionTI implements TypeInfo {
   }
   toUnique() {
     return [...this.types.typeset].join("|")
-  }
-  toAst() {
-    return ts.factory.createUnionTypeNode(this.types.types.map(a => a.toAst()))
   }
   toTypeString(text: string, level: number) {
     return this.types.types.map(a => a.toTypeString(text, level)).join("|")

@@ -24,7 +24,7 @@ export async function load(
   return loaded
 }
 
-process.on("beofreExit", () => {
+process.on("beforeExit", () => {
   postprocess(filenames)
 })
 

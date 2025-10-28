@@ -1,7 +1,7 @@
 import { ts, Project, Node } from "ts-morph"
 import fs from "node:fs"
 import { calls } from "../instrument/trace.ts"
-import { combine_traces } from "../typeinfo/combine.ts"
+import { combine_traces, combine_types } from "../typeinfo/combine.ts"
 
 
 export function transform(filename: string) {
@@ -33,9 +33,15 @@ export function transform(filename: string) {
     })
 
     if (!(Node.isGetAccessorDeclaration(node) || Node.isSetAccessorDeclaration(node))) {
-      // TODO: do generators
-      let ret = trace.returns.toTypeString(indentation, level)
-      if (ret !== "undefined") node.setReturnType(ret)
+        // TODO: do generators
+      if (trace.yields.length !== 0) {
+        let gen = [combine_types(trace.yields).toTypeString(indentation, level)]
+        if (trace.returns.type !== "undefined") gen.push(trace.returns.toTypeString(indentation, level))
+        node.setReturnType(`Generator<${gen.join(", ")}>`)
+        return
+      }
+
+      if (trace.returns.type !== "undefined") node.setReturnType(trace.returns.toTypeString(indentation, level))
     }
 
   })

@@ -3,6 +3,7 @@ import { Session } from "inspector/promises"
 
 const s = new Session();
 const PREFIX = crypto.randomUUID()
+const scripts = {}
 global[PREFIX] = {}
 
 export type Location = {
@@ -24,7 +25,7 @@ export async function locate(f: Function): Promise<Location|undefined> {
 
   const location = props.internalProperties.find((prop) => prop.name === '[[FunctionLocation]]');
   if (location?.value === undefined) return
-  const source = this.scripts[location.value.value.scriptId].url;
+  const source = scripts[location.value.value.scriptId].url;
 
   return {
     column: location.value.value.columnNumber,
@@ -36,7 +37,7 @@ export async function locate(f: Function): Promise<Location|undefined> {
 export async function connect_inspector() {
   s.connect();
   s.on('Debugger.scriptParsed', (res) => {
-    this.scripts[res.params.scriptId] = res.params;
+    scripts[res.params.scriptId] = res.params;
   });
   await s.post("Debugger.enable")
 }

@@ -104,12 +104,17 @@ global.__logyield = function(callid: string|undefined, val: any): any {
 global.__logdelyield = function<T>(callid: string|undefined, val: Generator<T>): Generator<T> {
   if (callid === undefined) return val
 
-  const _next = val.next
-  val.next = function(...a) {
-    const next: { value: T, done?: boolean } = _next(...a)
-    if (!next.done) inflight[callid].yields.push(compute_typeinfo(next.value))
-    else inflight[callid].returns = compute_typeinfo(next.value)
-    return next
+  const _iter = val[Symbol.iterator]
+  val[Symbol.iterator] = function() {
+    let iter = _iter.call(val)
+    let _next = iter.next
+    iter.next = function(...a) {
+      const next: { value: T, done?: boolean } = _next.call(iter, ...a)
+      if (!next.done) inflight[callid].yields.push(compute_typeinfo(next.value))
+      else inflight[callid].returns = compute_typeinfo(next.value)
+      return next
+    }
+    return iter
   }
   return val
 }

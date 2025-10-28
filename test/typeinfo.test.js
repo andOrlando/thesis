@@ -8,11 +8,6 @@ describe("type to typeinfo", () => {
     assert.equal(compute_typeinfo(3).toUnique(), new PrimitiveTI(3).toUnique())
   })
 
-  it("should handle functions", () => {
-    
-
-  })
-
   it("should handle objects", () => {
     assert.equal("{a:number,b:string}", compute_typeinfo({ a: 1, b: "hi" }).toUnique())
   })
