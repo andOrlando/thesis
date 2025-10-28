@@ -23,40 +23,34 @@ function run_tsc(file: string) {
 describe("basic integration tests", () => {
   it("should handle primitives", () => {
     let [out, _] = run_self(dedent(`
-    function f(a) {
-      return
-    }
+    function f(a) { return }
     f(1)`))
 
-    assert.equal(out.split("\n")[1], "function f(a: number) {")
+    assert.equal(out.split("\n")[1], "function f(a: number) { return }")
   })
   it("should handle objects", () => {
     let [out, _] = run_self(dedent(`
-    function f(a) { return; }
-    f({ a: 1 });`))
+    function f(a) { return }
+    f({a: 1});`))
     
-    assert.equal(out.replace(/^.*\n([\s\S]*)\n\n---\n/, "$1"), dedent(`
-    function f(a: {
-        a: number;
-    }) { return; }
-    f({ a: 1 });`))
+    assert.equal(out.split("\n")[1], "function f(a: { a: number }) { return }")
   })
 
   it("should handle unions", () => {
     let [out, _] = run_self(dedent(`
-    function f(a) { return; }
+    function f(a) { return }
     f(1);
     f("a");`))
 
-    assert.equal(out.split("\n")[1], "function f(a: number | string) { return; }")
+    assert.equal(out.split("\n")[1], "function f(a: number|string) { return }")
   })
 
   it("should handle arrays", () => {
     let [out, _] = run_self(dedent(`
-    function f(a) { return; }
+    function f(a) { return }
     f([1, 2, 3]);`))
 
-    assert.equal(out.split("\n")[1], "function f(a: number[]) { return; }")
+    assert.equal(out.split("\n")[1], "function f(a: number[]) { return }")
     
   })
   

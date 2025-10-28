@@ -38,6 +38,7 @@ export interface TypeInfo {
   type: string
   toUnique: () => string
   toAst: () => ts.TypeNode
+  toTypeString: (indentation: string, level: number) => string
 }
 
 export class PrimitiveTI implements TypeInfo {
@@ -79,6 +80,9 @@ export class PrimitiveTI implements TypeInfo {
 
     return ts.factory.createKeywordTypeNode(kind)
   }
+  toTypeString() {
+    return this.type
+  }
 }
 export class FunctionRefTI implements TypeInfo {
   type: "functionref"
@@ -105,18 +109,25 @@ export class FunctionRefTI implements TypeInfo {
   toAst() {
     return function_typeinfo_map.get(this.ref)!.toAst()
   }
+  toTypeString() {
+    return function_typeinfo_map.get(this.ref)!.toTypeString()
+  }
 }
 export class FunctionTI implements TypeInfo {
   // TODO: it's probably bad to have this as a promise
   // not sure yet how to resolve the async
-  location: Promise<Location|undefined>
+  location_promise: Promise<void>
+  location: Location|undefined
   trace?: Trace
   uuid: string
   type: "function"
   constructor(t: Function) {
     this.type = "function"
     this.uuid = crypto.randomUUID()
-    this.location = locate(t)
+    this.location_promise = new Promise(async resolve => {
+      this.location = await locate(t)
+      resolve()
+    })
   }
   toUnique() {
     return this.uuid
@@ -125,6 +136,21 @@ export class FunctionTI implements TypeInfo {
     
     throw new Error("TODO: implement")
     return ts.factory.createFunctionTypeNode(undefined, [], ts.factory.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword))
+  }
+  toTypeString(text: string, level: number) {
+    // if it hasn't been called, just return Function
+    if (this.trace === undefined) return "Function"
+    
+    // TODO: determine param names from location and do stuff with that
+    if (this.location === undefined) {}
+
+    let params = this.trace.args.map(a => a.toTypeString(text, level))
+      .map((a, i) => `p${i}: ${a}`)
+      .join(", ")
+
+    // TODO: handle yields
+    let returns = this.trace.returns.toTypeString(text, level)
+    return `(${params}) => ${returns}`
   }
 }
 
@@ -225,6 +251,43 @@ export class ObjectTI implements TypeInfo {
     return _toAst(this)
   }
 
+  toTypeString(text: string, level: number) {
+    let seen = new WeakSet<Object>()
+    function _toTypeString(node: ObjectTI, level: number) {
+      // if it's cyclic just put Object
+      if (node.type !== "object") return node.toTypeString(text, 0)
+      if (seen.has(node)) return "Object"
+      seen.add(node)
+
+      // otherwise we can do it as normal
+      // threshold for readability is >4 params or any param is >40 characters
+      // TODO: make this an option
+
+      let types: Record<string, string> = {}
+      for (const key of node.params.keys()) {
+        types[key] = node.params.get(key)!.toTypeString(text, level)
+      }
+
+      // TODO: print keys in order that they're seen in destructuring?
+      let keys = Object.keys(types)
+      if (keys.some(a => a.length > 40) || keys.length > 4) {
+        // we need to indent which in practice means line breaking with \n+\t*level after the first open bracket until the last close bracket, which gets \n+\t*(level-1)
+        return Object.entries(types).map(([key, value]: [string, string], i) => {
+          // indent everything below
+          value = value.split("\n").map(a => text.repeat(level+1)+a).join("\n")
+          // write the properties
+          let res = "\n" + text.repeat(level+1) + `${key}: ${value}`
+          // last guy also has to include the next line for the closing bracket
+          if (i == keys.length-1) res = res + "\n" + text.repeat(level)
+          return res
+        }).join("")
+      }
+
+      return `{ ${Object.entries(types).map(([key, value]) => `${key}: ${value}`).join(", ")} }`
+    }
+    return _toTypeString(this, level)
+  }
+
 
   
 }
@@ -242,6 +305,11 @@ export class ArrayTI implements TypeInfo {
   }
   toAst() {
     return ts.factory.createArrayTypeNode(combine_types(this.elemtypes).toAst())
+  }
+  toTypeString(text: string, level: number) {
+    let type = combine_types(this.elemtypes)
+    if (type instanceof ArrayTI || type instanceof PrimitiveTI) return `${type.toTypeString(text, level)}[]`
+    return `(${type.toTypeString(text, level)})[]`
   }
 }
 
@@ -263,6 +331,10 @@ export class ClassTI implements TypeInfo {
   toAst() {
     return ts.factory.createTypeReferenceNode(this.name, [])
   }
+  toTypeString() {
+    // TODO: we also have to import this name
+    return this.name
+  }
 }
 
 
@@ -280,6 +352,9 @@ export class UnionTI implements TypeInfo {
   }
   toAst() {
     return ts.factory.createUnionTypeNode(this.types.types.map(a => a.toAst()))
+  }
+  toTypeString(text: string, level: number) {
+    return this.types.types.map(a => a.toTypeString(text, level)).join("|")
   }
 }
 
