@@ -3,10 +3,14 @@ import ts from "typescript"
 import { locate } from "../utils/function_location.ts"
 import type { Location } from "../utils/function_location.ts"
 import { ObjectFunction } from "./constructor_library.ts"
-import { combine_types } from "./combine.ts"
+import { combine_traces, combine_types } from "./combine.ts"
+import { calls, funcobj_trace_map } from "../instrument/trace.ts"
 
 // references linked to a FunctionTI
 export const function_typeinfo_map: WeakMap<Function, FunctionTI> = new WeakMap()
+
+// property id for wrapping
+export const WRAP_PARAMID = crypto.randomUUID()
 
 
 export function compute_typeinfo(t: any, refs?: WeakMap<any, TypeInfo>) {
@@ -97,8 +101,8 @@ export class FunctionRefTI implements TypeInfo {
   get location() {
     return function_typeinfo_map.get(this.ref)!.location
   }
-  get trace() {
-    return function_typeinfo_map.get(this.ref)!.trace
+  get traces() {
+    return function_typeinfo_map.get(this.ref)!.traces
   }
   get uuid() {
     return function_typeinfo_map.get(this.ref)!.uuid
@@ -115,12 +119,27 @@ export class FunctionTI implements TypeInfo {
   // not sure yet how to resolve the async
   location_promise: Promise<void>
   location: Location|undefined
-  trace?: Trace
+  traces: TraceSet
   uuid: string
   type: "function"
   constructor(t: Function) {
     this.type = "function"
     this.uuid = crypto.randomUUID()
+
+    // if we're passed a wrapped function, unwrap it
+    while (t.hasOwnProperty(WRAP_PARAMID)) {
+      t = t[WRAP_PARAMID] as Function
+    }
+
+    // if this function has already been profiled by us, use the one traceset
+    // if it has not, it's still possilbe that it's profiled in the future, so add to the map
+    if (funcobj_trace_map.has(t)) {
+      this.traces = funcobj_trace_map.get(t)!
+    } else {
+      this.traces = new TraceSet()
+      funcobj_trace_map.set(t, this.traces)
+    }
+    
     this.location_promise = new Promise(async resolve => {
       this.location = await locate(t)
       resolve()
@@ -130,18 +149,20 @@ export class FunctionTI implements TypeInfo {
     return this.uuid
   }
   toTypeString(text: string, level: number) {
+    
     // if it hasn't been called, just return Function
-    if (this.trace === undefined) return "Function"
+    if (this.traces.size === 0) return "Function"
     
     // TODO: determine param names from location and do stuff with that
-    if (this.location === undefined) {}
+    if (this.location !== undefined) {}
 
-    let params = this.trace.args.map(a => a.toTypeString(text, level))
+    let trace = combine_traces(this.traces.traces)
+    let params = trace.args.map(a => a.toTypeString(text, level))
       .map((a, i) => `p${i}: ${a}`)
       .join(", ")
 
     // TODO: handle yields
-    let returns = this.trace.returns.toTypeString(text, level)
+    let returns = trace.returns.toTypeString(text, level)
     return `(${params}) => ${returns}`
   }
 }
@@ -348,10 +369,12 @@ export class Trace {
 export class TraceSet {
   traces: Trace[]
   traceset: Set<string>
+  size: number
 
   constructor() {
     this.traces = []
     this.traceset = new Set()
+    this.size = 0
   }
 
   add(trace: Trace) {
@@ -359,6 +382,7 @@ export class TraceSet {
     if (this.traceset.has(trace_s)) return
     this.traceset.add(trace_s)
     this.traces.push(trace)
+    this.size++
   }
 
   has(trace: Trace) {

@@ -56,8 +56,7 @@ describe("basic integration tests", () => {
   it("should handle generators", () => {
     let [out, _] = run_self(dedent(`
     function* f() { yield 3; return "hi" }
-    for (const a of f()) {}
-    `))
+    for (const a of f()) {}`))
 
     assert.equal(out.split("\n")[1], `function* f(): Generator<number, string> { yield 3; return "hi" }`)
   })
@@ -74,11 +73,37 @@ describe("basic integration tests", () => {
   it("should handle delegated generators", () => {
     let [out, _] = run_self(dedent(`
     function* f() { yield* [1, 2, 3] }
-    for (const a of f()) {}
-    `))
+    for (const a of f()) {}`))
 
     assert.equal(out.split("\n")[1], `function* f(): Generator<number> { yield* [1, 2, 3] }`)
   })
+
+  it("should handle functions", () => {
+    let [out, _] = run_self(dedent(`
+    function f(a) { a("hi") }
+    function g(s) { return s }
+    f(g)`))
+
+
+    console.log(out)
+    assert.equal(out.split("\n")[1], `function f(a: (p0: string) => string) { a("hi") }`)
+    assert.equal(out.split("\n")[2], `function g(s: string): string { return s }`)
+  })
+
+
+  it("should handle functions 2", () => {
+    let [out, _] = run_self(dedent(`
+    function f(a) { a("hi") }
+    function g(s) { return s }
+    g("hi")
+    f(g)`))
+
+
+    console.log(out)
+    assert.equal(out.split("\n")[1], `function f(a: (p0: string) => string) { a("hi") }`)
+    assert.equal(out.split("\n")[2], `function g(s: string): string { return s }`)
+  })
+  
   
 })
 

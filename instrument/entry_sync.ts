@@ -2,6 +2,7 @@ import { registerHooks } from "node:module"
 import { instrument } from "./instrument.ts"
 import "./trace.ts"
 import { postprocess } from "../postprocess/postprocess.ts"
+import { connect_inspector, disconnect_inspector } from "../utils/function_location.ts"
 
 // https://nodejs.org/api/module.html#customization-hooks
 
@@ -27,8 +28,10 @@ registerHooks({
   }
 })
 
+connect_inspector()
 process.on("beforeExit", () => {
   postprocess(filenames)
+  disconnect_inspector()
 })
 
 

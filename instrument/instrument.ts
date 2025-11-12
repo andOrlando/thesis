@@ -20,6 +20,24 @@ function make_expression_body(node: acorn.Function) {
   } as acorn.BlockStatement
 }
 
+function name_anonymous_function(node: acorn.ArrowFunctionExpression | acorn.FunctionExpression): [string, acorn.ExpressionStatement] {
+  let uuid = uuid_underscore()
+
+  return [uuid, {
+    type: "ExpressionStatement",
+    expression: {
+      type: "AssignmentExpression",
+      operator: "=",
+      left: {
+        type: "Identifier",
+        name: uuid
+      } as acorn.Identifier,
+      right: node
+    } as acorn.AssignmentExpression
+  } as acorn.ExpressionStatement]
+  
+}
+
 function make_call_expression(logtype: "__logarg"|"__logret"|"__logyield"|"__logdelyield", params: acorn.Expression[]): acorn.CallExpression {
   return {
     type: "CallExpression",
@@ -42,7 +60,7 @@ function make_call_expression(logtype: "__logarg"|"__logret"|"__logyield"|"__log
 }
 
 
-function instrument_body(node: acorn.Function, path: string) {
+function instrument_body(node: acorn.Function, path: string, uuid?: string) {
 
   // we can make this type assertion because all expressions we've turned into bodies
   if (node.body.type !== "BlockStatement")
@@ -53,7 +71,8 @@ function instrument_body(node: acorn.Function, path: string) {
   
   const uuids = node.params.map(uuid_underscore)
 
-
+  let name = node.id?.name || uuid!
+  
   // we need to handle array destructures seperately because we want to know
   // 1. the types of all the named variables
   // 2. the types of all the rest of the array, if it exists
@@ -203,6 +222,10 @@ function instrument_body(node: acorn.Function, path: string) {
           type: "Identifier",
           name: callid_varname,
         } as acorn.Identifier,
+        {
+          type: "Identifier",
+          name: name
+        } as acorn.Identifier,
         arg
       ])
     },
@@ -240,6 +263,10 @@ function instrument_body(node: acorn.Function, path: string) {
         } as acorn.Identifier,
         {
           type: "Identifier",
+          name: name
+        } as acorn.Identifier,
+        {
+          type: "Identifier",
           name: "undefined"
         } as acorn.Identifier,
       ])
@@ -251,11 +278,28 @@ export function instrument(source: string, path: string): string {
   const ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "module" })
 
   walk.simple(ast, {
-    Function(node: acorn.Function) {
+    Function(node: any, ) {
       // if we have an expression function, give it a body so we can add instrumentation
       if (node.expression) make_expression_body(node)
 
-      // add profiling for args, returns, yeilds
+      // if we have an arrow function, give it a name inline as an expression
+      if (node.type == "ArrowFunctionExpression" || node.type == "FunctionExpression") {
+
+        let node_copy = {...node}
+        let [uuid, expression] = name_anonymous_function(node_copy as (acorn.ArrowFunctionExpression|acorn.FunctionExpression))
+
+        // we have to some pretty type unsafe stuff where we modify inplace the contents of node
+        for (const key in node) delete node[key]
+
+        // now we reconstruct node as an expression
+        for (const key in expression) node[key] = expression[key]
+
+        // finally we can instrument the body of the node copy
+        instrument_body(node_copy, path, uuid)
+        return
+      }
+
+      // in normal case we can just instrument the body normally
       instrument_body(node, path)
     },
     // AssignmentExpression(node: acorn.AssignmentExpression) {

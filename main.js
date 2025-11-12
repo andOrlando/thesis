@@ -1,8 +1,6 @@
+function f(a) { a("hi") }
+function g(s) { return s }
+f(g)
+g("hi")
 
 
-
-function* f() {
-  yield* [1, 2, 3]
-}
-
-for (const a of f()) { console.log(a) }

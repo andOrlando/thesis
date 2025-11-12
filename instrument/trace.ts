@@ -1,8 +1,11 @@
-import { Trace, TraceSet, compute_typeinfo, function_typeinfo_map, ObjectTI } from "../typeinfo/types.ts"
+import { Trace, TraceSet, compute_typeinfo, function_typeinfo_map, ObjectTI, WRAP_PARAMID } from "../typeinfo/types.ts"
 import { ObjectFunction, GeneratorFunction } from "../typeinfo/constructor_library.ts"
 
 const inflight: Record<string, Trace> = {}
 export const calls: Record<string, TraceSet> = {}
+
+// map from an unwrapped function to its traces
+export const funcobj_trace_map: WeakMap<Function, TraceSet> = new WeakMap()
 
 // TODO: actually implement
 function shouldprofile(_loc: string): boolean {
@@ -12,18 +15,19 @@ function shouldprofile(_loc: string): boolean {
 
 function wrap_function(f: Function): Function {
     // if we've already wrapped/are profiling this function, ignore
-    if (function_typeinfo_map.has(f)) return f
-    
+    if (f.hasOwnProperty(WRAP_PARAMID)) return f
+
     // at this point we've created the typeinfo so we
     // should already be in the function_typeinfo_map
     const fti = function_typeinfo_map.get(f)!
     const wrapped = function(...args: any[]) {
-      fti.trace = new Trace(args)
+      const trace = new Trace(args)
+      fti.traces.add(trace)
       const res = f(...args)
 
       // if we're not a generator just profile the return
       if (typeof res !== "object" || res instanceof GeneratorFunction) {
-        fti.trace.returns = compute_typeinfo(res)
+        trace.returns = compute_typeinfo(res)
         return res
       }
 
@@ -31,14 +35,14 @@ function wrap_function(f: Function): Function {
       const _next = res.next
       res.next = function(...b: any[]) {
         const next: { value: any, done?: boolean } = _next(...b)
-        if (!next.done) fti.trace!.yields.push(compute_typeinfo(next.value))
-        else fti.trace!.returns = compute_typeinfo(next.value)
+        if (!next.done) trace.yields.push(compute_typeinfo(next.value))
+        else trace.returns = compute_typeinfo(next.value)
         return next
       }
       return res
     }
-
     function_typeinfo_map.set(wrapped, fti)
+    wrapped[WRAP_PARAMID] = f
     return wrapped
 }
 
@@ -66,6 +70,7 @@ global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...a
   
   const callid = crypto.randomUUID()
   inflight[callid] = new Trace(args)
+  
 
   // wrap all of our arguments as needed
   args = args.map((arg, i) => {
@@ -81,14 +86,28 @@ global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...a
   return [callid, ...args]
 }
 
-global.__logret = function(loc: string, callid: string|undefined, val?: any): any|undefined {
+global.__logret = function(loc: string, callid: string|undefined, f: Function, val?: any): any|undefined {
   if (callid === undefined) return val
 
   // bank inflight[callid], cleanup
   inflight[callid].returns = compute_typeinfo(val)
-  if (calls[loc] === undefined) calls[loc] = new TraceSet()
+  
+  // if we've seen it wrapped first
+  if (funcobj_trace_map.has(f)) {
+    calls[loc] = funcobj_trace_map.get(f)!
+  }
+  else if (calls.hasOwnProperty(loc)) {
+    funcobj_trace_map.set(f, calls[loc])
+  }
+  else {
+    const traceset = new TraceSet()
+    calls[loc] = traceset
+    funcobj_trace_map.set(f, traceset)
+  }
+  // if we've seen it normally first
   calls[loc].add(inflight[callid])
   delete inflight[callid]
+
 
   return val
 }
@@ -108,7 +127,7 @@ global.__logdelyield = function<T>(callid: string|undefined, val: Generator<T>):
   val[Symbol.iterator] = function() {
     let iter = _iter.call(val)
     let _next = iter.next
-    iter.next = function(...a) {
+    iter.next = function(...a: any[]) {
       const next: { value: T, done?: boolean } = _next.call(iter, ...a)
       if (!next.done) inflight[callid].yields.push(compute_typeinfo(next.value))
       else inflight[callid].returns = compute_typeinfo(next.value)
