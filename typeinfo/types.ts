@@ -4,7 +4,7 @@ import { locate } from "../utils/function_location.ts"
 import type { Location } from "../utils/function_location.ts"
 import { ObjectFunction } from "./constructor_library.ts"
 import { combine_traces, combine_types } from "./combine.ts"
-import { calls, funcobj_trace_map } from "../instrument/trace.ts"
+import { calls, funcref_trace_map, objref_objti_map } from "../instrument/trace.ts"
 
 // references linked to a FunctionTI
 export const function_typeinfo_map: WeakMap<Function, FunctionTI> = new WeakMap()
@@ -12,8 +12,7 @@ export const function_typeinfo_map: WeakMap<Function, FunctionTI> = new WeakMap(
 // property id for wrapping
 export const WRAP_PARAMID = crypto.randomUUID()
 
-
-export function compute_typeinfo(t: any, refs?: WeakMap<any, TypeInfo>) {
+export function compute_typeinfo(t: any, refs?: WeakMap<any, TypeInfo>): TypeInfo {
   if (refs === undefined) refs = new WeakMap()
   switch (typeof t) {
     case "object":
@@ -133,11 +132,11 @@ export class FunctionTI implements TypeInfo {
 
     // if this function has already been profiled by us, use the one traceset
     // if it has not, it's still possilbe that it's profiled in the future, so add to the map
-    if (funcobj_trace_map.has(t)) {
-      this.traces = funcobj_trace_map.get(t)!
+    if (funcref_trace_map.has(t)) {
+      this.traces = funcref_trace_map.get(t)!
     } else {
       this.traces = new TraceSet()
-      funcobj_trace_map.set(t, this.traces)
+      funcref_trace_map.set(t, this.traces)
     }
     
     this.location_promise = new Promise(async resolve => {
@@ -168,9 +167,12 @@ export class FunctionTI implements TypeInfo {
 }
 
 export class ObjectTI implements TypeInfo {
-  params: Map<string, TypeInfo>
+  params: Map<string|symbol, TypeInfo>
   type: "object"
   constructor(t: Object, refs: WeakMap<any, TypeInfo>) {
+    if (objref_objti_map.has(t)) return objref_objti_map.get(t)!
+    objref_objti_map.set(t, this)
+    
     this.type = "object"
     this.params = new Map()
 
@@ -214,25 +216,25 @@ export class ObjectTI implements TypeInfo {
       for (const key of obj.params.keys()) {
         const value = obj.params.get(key)!
         if (!(value instanceof ObjectTI)) {
-          params.push(`${key}:${value.toUnique()}`)
+          params.push(`${String(key)}:${value.toUnique()}`)
           continue
         }
 
         // if this isn't circular we're good
         let idx = repeated.indexOf(value)
         if (idx === -1) {
-          params.push(`${key}:${_toUnique(value)}`)
+          params.push(`${String(key)}:${_toUnique(value)}`)
         }
         
         // if it is circular and it's the first time we're seeing this, <ref *i>
         else if (!seen2.has(value)) {
           seen2.add(value)
-          params.push(`${key}:<ref *${idx}>${_toUnique(value)}`)
+          params.push(`${String(key)}:<ref *${idx}>${_toUnique(value)}`)
         }
 
         // otherwise we're circular
         else {
-          params.push(`${key}:<Circular *${idx}>`)
+          params.push(`${String(key)}:<Circular *${idx}>`)
         }
       }
 
@@ -258,9 +260,23 @@ export class ObjectTI implements TypeInfo {
       // threshold for readability is >4 params or any param is >40 characters
       // TODO: make this an option
 
-      let types: Record<string, string> = {}
+      let types: Record<string|symbol, string> = {}
+      let questionmark: (string|symbol)[] = []
       for (const key of node.params.keys()) {
-        types[key] = node.params.get(key)!.toTypeString(text, level)
+        // if we have an object that's undefined|something then we do some extra special stuff
+        let typ = node.params.get(key)
+        if (typ instanceof UnionTI && typ.types.types.some(t => t.type === "undefined")) {
+          typ = new UnionTI(typ.types.types.filter(t => t.type !== "undefined"))
+          questionmark.push(key)
+        }
+        
+        types[key] = typ!.toTypeString(text, level)
+      }
+
+      function compute_keystring(key: string): string {
+        let res = key.match(/^[a-zA-Z_$]\w*$/) ? key : `"${key}"`
+        res = questionmark.includes(key) ? `${res}?` : res
+        return res
       }
 
       // TODO: print keys in order that they're seen in destructuring?
@@ -271,14 +287,14 @@ export class ObjectTI implements TypeInfo {
           // indent everything below
           value = value.split("\n").map(a => text.repeat(level+1)+a).join("\n")
           // write the properties
-          let res = "\n" + text.repeat(level+1) + `${key}: ${value}`
+          let res = "\n" + text.repeat(level+1) + `${compute_keystring(key)}: ${value}`
           // last guy also has to include the next line for the closing bracket
           if (i == keys.length-1) res = res + "\n" + text.repeat(level)
           return res
         }).join("")
       }
 
-      return `{ ${Object.entries(types).map(([key, value]) => `${key}: ${value}`).join(", ")} }`
+      return `{ ${Object.entries(types).map(([key, value]) => `${compute_keystring(key)}: ${value}`).join(", ")} }`
     }
     return _toTypeString(this, level)
   }

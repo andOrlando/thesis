@@ -1,6 +1,6 @@
-function f(a) { a("hi") }
-function g(s) { return s }
-f(g)
-g("hi")
-
-
+function f(a)
+{
+  a.b = 1
+  return a
+}
+f({a: 1})

@@ -84,8 +84,6 @@ describe("basic integration tests", () => {
     function g(s) { return s }
     f(g)`))
 
-
-    console.log(out)
     assert.equal(out.split("\n")[1], `function f(a: (p0: string) => string) { a("hi") }`)
     assert.equal(out.split("\n")[2], `function g(s: string): string { return s }`)
   })
@@ -98,13 +96,35 @@ describe("basic integration tests", () => {
     g("hi")
     f(g)`))
 
-
-    console.log(out)
     assert.equal(out.split("\n")[1], `function f(a: (p0: string) => string) { a("hi") }`)
     assert.equal(out.split("\n")[2], `function g(s: string): string { return s }`)
   })
   
-  
+  it("should handle easy objects", () => {
+    let [out, _] = run_self(dedent(`
+    function f(a) { return a }
+    f({a: 1})`))
+
+    assert.equal(out.split("\n")[1], `function f(a: { a: number }): { a: number } { return a }`)
+  })
+
+  it("should handle objects with assignment", () => {
+    let [out, _] = run_self(dedent(`
+    function f(a) {
+      a.b = 1
+      return a
+    }
+    f({a: 1})`))
+
+    assert.equal(out.split("\n").slice(1, -2).join("\n"), dedent`
+    function f(a: { a: number, b?: number }): { a: number, b?: number } {
+      a.b = 1
+      return a
+    }
+    f({a: 1})`)
+  })
+
+ 
 })
 
 

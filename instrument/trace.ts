@@ -1,11 +1,14 @@
 import { Trace, TraceSet, compute_typeinfo, function_typeinfo_map, ObjectTI, WRAP_PARAMID } from "../typeinfo/types.ts"
+import { combine_types } from "../typeinfo/combine.ts"
 import { ObjectFunction, GeneratorFunction } from "../typeinfo/constructor_library.ts"
 
 const inflight: Record<string, Trace> = {}
 export const calls: Record<string, TraceSet> = {}
 
 // map from an unwrapped function to its traces
-export const funcobj_trace_map: WeakMap<Function, TraceSet> = new WeakMap()
+export const funcref_trace_map: WeakMap<Function, TraceSet> = new WeakMap()
+// map from object reference to object TypeInfo
+export const objref_objti_map: WeakMap<Object, ObjectTI> = new WeakMap()
 
 // TODO: actually implement
 function shouldprofile(_loc: string): boolean {
@@ -47,22 +50,24 @@ function wrap_function(f: Function): Function {
 }
 
 function wrap_object(o: Object, oti: ObjectTI): Object {
-  return new Proxy(o, {
+  const proxy = new Proxy(o, {
     get(t: Object, p: string|symbol, reciever: any) {
-      // if oti.params[p]
-
-      
-      // oti.params[p] =
-
+      if (p === WRAP_PARAMID) return o
       return Reflect.get(t, p, reciever)
+    },
+    set(t: Object, p: string|symbol, v: any, reciever: any) {
+     
+      const ti = compute_typeinfo(v)
+      // if we don't already have a typeinfo for this it didn't exist before, so and it with undefined
+      const other = oti.params.has(p) ? oti.params.get(p)! : compute_typeinfo(undefined)
+      
+      oti.params.set(p, combine_types([ti, other]))
+      return Reflect.set(t, p, v, reciever)
     }
   })
+  objref_objti_map.set(proxy, oti)
+  return proxy
 }
-
-
-
-
-
 
 
 global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...any[]] {
@@ -78,7 +83,8 @@ global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...a
     if (typeof arg === "object" && arg !== null) {
       // we wanna wrap objects whose constructor is ``object''
       // TODO: do something about classes
-      if (Object.getPrototypeOf(arg).constructor === ObjectFunction) return wrap_object(arg, inflight[callid].args[i] as ObjectTI)
+      if (Object.getPrototypeOf(arg).constructor === ObjectFunction && !arg[WRAP_PARAMID])
+        return wrap_object(arg, inflight[callid].args[i] as ObjectTI)
     }
     return arg
   })
@@ -93,21 +99,20 @@ global.__logret = function(loc: string, callid: string|undefined, f: Function, v
   inflight[callid].returns = compute_typeinfo(val)
   
   // if we've seen it wrapped first
-  if (funcobj_trace_map.has(f)) {
-    calls[loc] = funcobj_trace_map.get(f)!
+  if (funcref_trace_map.has(f)) {
+    calls[loc] = funcref_trace_map.get(f)!
   }
   else if (calls.hasOwnProperty(loc)) {
-    funcobj_trace_map.set(f, calls[loc])
+    funcref_trace_map.set(f, calls[loc])
   }
   else {
     const traceset = new TraceSet()
     calls[loc] = traceset
-    funcobj_trace_map.set(f, traceset)
+    funcref_trace_map.set(f, traceset)
   }
   // if we've seen it normally first
   calls[loc].add(inflight[callid])
   delete inflight[callid]
-
 
   return val
 }
