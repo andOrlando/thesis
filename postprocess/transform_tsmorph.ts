@@ -50,17 +50,17 @@ export function transform(filename: string) {
       param.setType(trace.args[i].toTypeString(indentation, level))
     })
 
-    if (!(Node.isGetAccessorDeclaration(node) || Node.isSetAccessorDeclaration(node))) {
-        // TODO: do generators
-      if (trace.yields.length !== 0) {
-        let gen = [combine_types(trace.yields).toTypeString(indentation, level)]
-        if (trace.returns.type !== "undefined") gen.push(trace.returns.toTypeString(indentation, level))
-        node.setReturnType(`Generator<${gen.join(", ")}>`)
-        return
-      }
-
-      if (trace.returns.type !== "undefined") node.setReturnType(trace.returns.toTypeString(indentation, level))
+    // set return type
+    // TODO: do generators
+    if (trace.yields.length !== 0) {
+      let gen = [combine_types(trace.yields).toTypeString(indentation, level)]
+      if (trace.returns.type !== "undefined") gen.push(trace.returns.toTypeString(indentation, level))
+      node.setReturnType(`Generator<${gen.join(", ")}>`)
+      return
     }
+
+    if (trace.returns.type !== "undefined") node.setReturnType(trace.returns.toTypeString(indentation, level))
+    // }
 
   })
   

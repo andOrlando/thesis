@@ -98,19 +98,30 @@ global.__logret = function(loc: string, callid: string|undefined, f: Function, v
   // bank inflight[callid], cleanup
   inflight[callid].returns = compute_typeinfo(val)
   
+  // if we're in the rare case that we call a function whose reference we can't get
+  // users should not be able to get it either, so we just don't set funcref_trace_map
+  // since it can never be passed into anything
+  if (f === undefined) {
+    calls[loc] = new TraceSet()
+  }
+
   // if we've seen it wrapped first
-  if (funcref_trace_map.has(f)) {
+  else if (funcref_trace_map.has(f)) {
     calls[loc] = funcref_trace_map.get(f)!
   }
+  // if we've seen it called before but it's not in funcref_trace_map
+  // this shouldn't happen
   else if (calls.hasOwnProperty(loc)) {
     funcref_trace_map.set(f, calls[loc])
   }
+  // if we've never seen it before
   else {
     const traceset = new TraceSet()
     calls[loc] = traceset
     funcref_trace_map.set(f, traceset)
   }
-  // if we've seen it normally first
+
+  // bank the parameters/returns
   calls[loc].add(inflight[callid])
   delete inflight[callid]
 

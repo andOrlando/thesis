@@ -1,6 +1,8 @@
-function f(a)
-{
-  a.b = 1
-  return a
+class Dog {
+  get #bark() {
+    return "woof"
+  }
+  bark() { return this.#bark }
+
 }
-f({a: 1})
+(new Dog()).bark()

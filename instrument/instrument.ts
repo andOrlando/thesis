@@ -60,18 +60,28 @@ function make_call_expression(logtype: "__logarg"|"__logret"|"__logyield"|"__log
 }
 
 
-function instrument_body(node: acorn.Function, path: string, uuid?: string) {
+// node is function to instrument
+// path is filepath, used in logging
+// self? is the expression we pass into logging to get the function object
+// location_num? is for member expresisons, we might have a different location
+function instrument_body(node: acorn.Function, path: string, self?: acorn.Expression, location_num?: number) {
 
   // we can make this type assertion because all expressions we've turned into bodies
   if (node.body.type !== "BlockStatement")
     throw new Error("Saw a non-block node type in function body")
 
   const body: acorn.BlockStatement = node.body
-  const location = `${path}:${node.start}`
+  const location = `${path}:${location_num || node.start}`
   
   const uuids = node.params.map(uuid_underscore)
 
-  let name = node.id?.name || uuid!
+  // if we're not explicitly given a self, we can just assume we're in
+  // a normal function with a name
+  let self_expr = self || {
+    type: "Identifier",
+    name: node.id!.name
+  } as acorn.Identifier
+  
   
   // we need to handle array destructures seperately because we want to know
   // 1. the types of all the named variables
@@ -222,10 +232,7 @@ function instrument_body(node: acorn.Function, path: string, uuid?: string) {
           type: "Identifier",
           name: callid_varname,
         } as acorn.Identifier,
-        {
-          type: "Identifier",
-          name: name
-        } as acorn.Identifier,
+        self_expr,
         arg
       ])
     },
@@ -261,10 +268,7 @@ function instrument_body(node: acorn.Function, path: string, uuid?: string) {
           type: "Identifier",
           name: callid_varname,
         } as acorn.Identifier,
-        {
-          type: "Identifier",
-          name: name
-        } as acorn.Identifier,
+        self_expr,
         {
           type: "Identifier",
           name: "undefined"
@@ -277,14 +281,72 @@ function instrument_body(node: acorn.Function, path: string, uuid?: string) {
 export function instrument(source: string, path: string): string {
   const ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "module" })
 
-  walk.simple(ast, {
-    Function(node: any, ) {
+  walk.ancestor(ast, {
+    Function(node: any, _state, ancestors) {
       // if we have an expression function, give it a body so we can add instrumentation
       if (node.expression) make_expression_body(node)
 
-      // if we have an arrow function, give it a name inline as an expression
-      if (node.type == "ArrowFunctionExpression" || node.type == "FunctionExpression") {
+      // if it's a class method use `this.whatever` or `this[expression]`
+      // if it's a getter we have to use Object.getOwnPropertyDescriptor(Object.getPrototype(this), "name").get
+      if (ancestors.length > 1 && ancestors[ancestors.length-2].type == "MethodDefinition"){
+        let method_def = ancestors[ancestors.length-2] as acorn.MethodDefinition
+        let funcref: acorn.Expression | undefined
 
+        if (method_def.key.type == "PrivateIdentifier") {
+          // if we have a private getter/setter it's impossible to get the function reference
+          funcref = { type: "Identifier", name: "undefined" } as acorn.Identifier
+        }
+        else if (method_def.kind == "get" || method_def.kind == "set") {
+          // if we have a public getter/setter we can get the funcref via the prototype
+          // This code literally only matters in the case of someone passing a getter/setter function
+          // into another function
+          funcref = {
+            type: "CallExpression",
+            callee: {
+              type: "MemberExpression",
+              object: { type: "Identifier", name: "Object" } as acorn.Identifier,
+              property: { type: "Identifier", name: "getOwnPropertyDescriptor"} as acorn.Identifier,
+              computed: false,
+              optional: false
+            } as acorn.MemberExpression,
+            arguments: [
+              {
+                type: "CallExpression",
+                callee: {
+                  type: "MemberExpression",
+                  object: { type: "Identifier", name: "Object" } as acorn.Identifier,
+                  property: { type: "Identifier", name: "getPrototypeOf"} as acorn.Identifier,
+                  computed: false,
+                  optional: false
+                } as acorn.MemberExpression,
+                arguments: [{ type: "ThisExpression"}]
+              } as acorn.CallExpression,
+
+              method_def.key.type == "Identifier" ?
+                { type: "Literal", value: method_def.key.name, raw: `"${method_def.key.name}"`, } as acorn.Literal :
+                method_def.key
+            ] 
+
+          } as acorn.CallExpression
+        }
+        else {
+          // in a normal case we can just use `this.whatever` or `this["whatever"]`
+          funcref = {
+            type: "MemberExpression",
+            object: { type: "ThisExpression" } as acorn.ThisExpression,
+            property: method_def.key,
+            computed: method_def.key.type != "Identifier",
+            optional: false
+          } as acorn.MemberExpression
+        }
+
+        instrument_body(node, path, funcref, method_def.start)
+        return
+      }
+      
+      // if we have an arrow function, give it a name inline as an expression
+      else if (node.type == "ArrowFunctionExpression" || node.type == "FunctionExpression") {
+        
         let node_copy = {...node}
         let [uuid, expression] = name_anonymous_function(node_copy as (acorn.ArrowFunctionExpression|acorn.FunctionExpression))
 
@@ -295,7 +357,10 @@ export function instrument(source: string, path: string): string {
         for (const key in expression) node[key] = expression[key]
 
         // finally we can instrument the body of the node copy
-        instrument_body(node_copy, path, uuid)
+        instrument_body(node_copy, path, {
+          type: "Identifier",
+          name: uuid
+        } as acorn.Identifier)
         return
       }
 
@@ -308,7 +373,10 @@ export function instrument(source: string, path: string): string {
     
   })
   
-  return astring.generate(ast)
+  // console.dir(ast, {depth: null})
+  // return astring.generate(ast)
+  let res = astring.generate(ast)
+  return res
 }
 
 
