@@ -71,7 +71,7 @@ function instrument_body(node: acorn.Function, path: string, self?: acorn.Expres
     throw new Error("Saw a non-block node type in function body")
 
   const body: acorn.BlockStatement = node.body
-  const location = `${path}:${location_num || node.start}`
+  const location = `${path}:${location_num === undefined ? node.start : location_num}`
   
   const uuids = node.params.map(uuid_underscore)
 
@@ -224,11 +224,6 @@ function instrument_body(node: acorn.Function, path: string, self?: acorn.Expres
       } as acorn.Identifier
       node.argument = make_call_expression("__logret", [
         {
-          type: "Literal",
-          value: location,
-          raw: `"${location}"`
-        } as acorn.Literal,
-        {
           type: "Identifier",
           name: callid_varname,
         } as acorn.Identifier,
@@ -260,11 +255,6 @@ function instrument_body(node: acorn.Function, path: string, self?: acorn.Expres
       type: "ReturnStatement",
       argument: make_call_expression("__logret", [
         {
-          type: "Literal",
-          value: location,
-          raw: `"${location}"`
-        } as acorn.Literal,
-        {
           type: "Identifier",
           name: callid_varname,
         } as acorn.Identifier,
@@ -288,6 +278,9 @@ export function instrument(source: string, path: string): string {
 
       // if it's a class method use `this.whatever` or `this[expression]`
       // if it's a getter we have to use Object.getOwnPropertyDescriptor(Object.getPrototype(this), "name").get
+      // 
+      // for methods we have to specify method_def.start as the location rather than just node.start since
+      // tsmorph includes the get/set in the node, whereas acorn does not
       if (ancestors.length > 1 && ancestors[ancestors.length-2].type == "MethodDefinition"){
         let method_def = ancestors[ancestors.length-2] as acorn.MethodDefinition
         let funcref: acorn.Expression | undefined
@@ -364,6 +357,12 @@ export function instrument(source: string, path: string): string {
         return
       }
 
+      // if we `export function` we need to use the start of the export instead
+      if (ancestors.length > 1 && ancestors[ancestors.length-2].type == "ExportNamedDeclaration") {
+        instrument_body(node, path, undefined, ancestors[ancestors.length-2].start)
+        return
+      }
+      
       // in normal case we can just instrument the body normally
       instrument_body(node, path)
     },

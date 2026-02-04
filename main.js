@@ -1,8 +1,4 @@
-class Dog {
-  get #bark() {
-    return "woof"
-  }
-  bark() { return this.#bark }
+import { f2 } from "./main2.js"
 
-}
-(new Dog()).bark()
+export function f(a) { return a }
+f(f2())

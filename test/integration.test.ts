@@ -1,17 +1,35 @@
-import { describe, it } from "node:test"
+import { describe, it, before, after } from "node:test"
 import assert from "node:assert"
 import child_process from "node:child_process"
 import { OutputMethods } from "../postprocess/postprocess.ts"
 import os from "node:os"
 import fs from "node:fs"
 import dedent from "dedent-js"
+import path from "path"
+
+let tmpdir: string|undefined = undefined
+function setup() {
+  tmpdir = path.join(os.tmpdir(), "thesis")
+  fs.rmSync(tmpdir, { recursive: true, force: true })
+  fs.mkdirSync(tmpdir)
+
+  // symlink node_modules and package.json
+  fs.symlinkSync("./dummy_node_modules", path.join(tmpdir, "node_modules"), "dir")
+  fs.symlinkSync("./dummy_package.json", path.join(tmpdir, "package.json"), "dir")
+}
+
+function teardown() {
+  // unlink and delete
+  fs.unlinkSync(path.join(tmpdir!, "node_modules"))
+  fs.unlinkSync(path.join(tmpdir!, "package.json"))
+  fs.rmSync(tmpdir!, { recursive: true, force: true })
+}
 
 function run_self(text: string, ...others: string[]) {
-  let tmp = os.tmpdir()
-  let path = tmp+"/1.js"
+  let path = tmpdir!+"/1.js"
   fs.writeFileSync(path, text)
   
-  others.forEach((s, i) => fs.writeFileSync(tmp+`/${i+2}.js`, s))
+  others.forEach((s, i) => fs.writeFileSync(tmpdir!+`/${i+2}.js`, s))
   
   const child = child_process.spawnSync(process.execPath, ["--import=code/entry", path], { env: {
     OUTPUT: OutputMethods.PRINT
@@ -19,10 +37,12 @@ function run_self(text: string, ...others: string[]) {
   return [child.stdout.toString(), child.stderr.toString()]
 }
 
-// function run_tsc(file: string) {
-// }
 
 describe("basic integration tests", () => {
+
+  before(setup)
+  after(teardown)
+  
   it("should handle primitives", () => {
     let [out, _] = run_self(dedent(`
     function f(a) { return }
@@ -57,6 +77,9 @@ describe("basic integration tests", () => {
 
 })
 describe("integration tests for iterators", () => {
+
+  before(setup)
+  after(teardown)
   
   it("should handle generators", () => {
     let [out, _] = run_self(dedent(`
@@ -87,6 +110,9 @@ describe("integration tests for iterators", () => {
 
 describe("integration tests for higher order functions", () => {
 
+  before(setup)
+  after(teardown)
+    
   it("should handle functions", () => {
     let [out, _] = run_self(dedent(`
     function f(a) { a("hi") }
@@ -112,6 +138,9 @@ describe("integration tests for higher order functions", () => {
 })
   
 describe("integration tests for objects", () => {
+
+  before(setup)
+  after(teardown)
   
   it("should handle easy objects", () => {
     let [out, _] = run_self(dedent(`
@@ -140,7 +169,10 @@ describe("integration tests for objects", () => {
 })
 
 describe("integration tests for classes", () => {
-set 
+
+  before(setup)
+  after(teardown)
+
   it("should handle simple builtin classes", () => {
     let [out, _] = run_self(dedent(`
     function f(a) { return a }
@@ -170,18 +202,17 @@ set
     assert.equal(out.split("\n")[1], "function f(a: Dog): Dog { return a }")
   })
   
-  it("should type import used classes", {skip: true}, () => {
+  it("should type import used classes", () => {
     let [out, _] = run_self(dedent(`
-    import { f } from "./2.js"
-    class Dog{}
-    f(new Dog())`), 
-    "export function f(a) { return a }")
+    import { f } from "./2.js";
+    class Dog{};
+    f(new Dog());`), 
+    "export function f(a) { return a; }")
     
-    console.log(out)
-    dedent(`
-    type import { Dog } from "./1.js"
-    function f(a: Dog): Dog { return a }`)
-    assert.fail()
+    assert.equal(out.split("\n").slice(6, -2).join("\n"), dedent(`
+    import type { Dog } from "./1.js";
+
+    export function f(a: Dog): Dog { return a; }`))
   })
   
   it("should annotate constructors", () => {

@@ -10,8 +10,6 @@ export const OutputMethods = {
 
 export function postprocess(filenames: string[]) {
   
-  // TODO: wait for all location promises to resolve, become async
-  
   const output = process.env.OUTPUT ?? OutputMethods.PRINT
   if (!Object.values(OutputMethods).includes(output)) throw Error("invalid output type")
 

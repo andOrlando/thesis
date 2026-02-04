@@ -1,6 +1,8 @@
 import { instrument } from "./instrument.ts"
 import type { Module } from "node:module"
 import { postprocess } from "../postprocess/postprocess.ts"
+import { connect_inspector, disconnect_inspector } from "../utils/function_location.ts"
+import { ClassTI, FunctionTI } from "../typeinfo/types.ts"
 
 const filenames: string[] = []
 export async function load(
@@ -24,7 +26,11 @@ export async function load(
   return loaded
 }
 
-process.on("beforeExit", () => {
+process.on("beforeExit", async () => {
+  connect_inspector()
+  await ClassTI.get_locations()
+  await FunctionTI.get_locations()
+  disconnect_inspector()
   postprocess(filenames)
 })
 

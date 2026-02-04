@@ -22,7 +22,7 @@ describe("transform_acorn", () => {
     assert.match(res.trim(), litd`
     function dog() {
       let [${uuid}] = global.__logarg("file:0");
-      return global.__logret("file:0", ${uuid}, dog, 'dog');
+      return global.__logret(${uuid}, dog, 'dog');
     }`)
   })
 
@@ -40,9 +40,9 @@ describe("transform_acorn", () => {
       let [${uuid}] = global.__logarg("file:0");
       function dog2() {
         let [${uuid}] = global.__logarg("file:19");
-        return global.__logret("file:19", ${uuid}, dog2, "dog2");
+        return global.__logret(${uuid}, dog2, "dog2");
       }
-      return global.__logret("file:0", ${uuid}, dog, dog2());
+      return global.__logret(${uuid}, dog, dog2());
     }`)
   })
 
@@ -51,7 +51,7 @@ describe("transform_acorn", () => {
     assert.match(res.trim(), litd`
     function dog(${uuid}, ${uuid}) {
       let [${uuid}, a, b] = global.__logarg("file:0", ${uuid}, ${uuid});
-      return global.__logret("file:0", ${uuid}, dog, a + b);
+      return global.__logret(${uuid}, dog, a + b);
     }`)
   })
 
@@ -60,7 +60,7 @@ describe("transform_acorn", () => {
     assert.match(res.trim(), litd`
     function dog() {
       let [${uuid}] = global.__logarg("file:0");
-      return global.__logret("file:0", ${uuid}, dog, undefined);
+      return global.__logret(${uuid}, dog, undefined);
     }`)
   })
 
@@ -70,7 +70,7 @@ describe("transform_acorn", () => {
     function dog(${uuid}) {
       let [${uuid}, ${uuid}, ...${uuid}] = ${uuid};
       let [${uuid}, [a, b]] = global.__logarg("file:0", ${uuid}, ${uuid}, ${uuid});
-      return global.__logret("file:0", ${uuid}, dog, undefined);
+      return global.__logret(${uuid}, dog, undefined);
     }`)
   })
 
@@ -79,7 +79,7 @@ describe("transform_acorn", () => {
     assert.match(res.trim(), litd`
     function dog(${uuid}) {
       let [${uuid}, {a, b}] = global.__logarg("file:0", ${uuid});
-      return global.__logret("file:0", ${uuid}, dog, undefined);
+      return global.__logret(${uuid}, dog, undefined);
     }`)
   })
 
@@ -89,7 +89,7 @@ describe("transform_acorn", () => {
     function dog(${uuid}) {
       let [${uuid}, [${uuid}, ${uuid}, ...${uuid}], ...${uuid}] = ${uuid};
       let [${uuid}, [a, [b, c]]] = global.__logarg("file:0", ${uuid}, ${uuid}, ${uuid}, ${uuid}, ${uuid});
-      return global.__logret("file:0", ${uuid}, dog, undefined);
+      return global.__logret(${uuid}, dog, undefined);
     }`)
   })
 
@@ -98,7 +98,7 @@ describe("transform_acorn", () => {
     assert.match(res.trim(), litd`
     function dog(${uuid}) {
       let [${uuid}, {a: {b, c}}] = global.__logarg("file:0", ${uuid});
-      return global.__logret("file:0", ${uuid}, dog, undefined);
+      return global.__logret(${uuid}, dog, undefined);
     }`)
   })
   
@@ -107,7 +107,7 @@ describe("transform_acorn", () => {
     assert.match(res.trim(), litd`
     function dog(${uuid} = 5) {
       let [${uuid}, a] = global.__logarg("file:0", ${uuid});
-      return global.__logret("file:0", ${uuid}, dog, undefined);
+      return global.__logret(${uuid}, dog, undefined);
     }`)
   })
 
@@ -120,7 +120,7 @@ describe("transform_acorn", () => {
       b: 5
     }) {
       let [${uuid}, {a, b}] = global.__logarg("file:0", ${uuid});
-      return global.__logret("file:0", ${uuid}, dog, undefined);
+      return global.__logret(${uuid}, dog, undefined);
     }`)
   })
 
@@ -129,7 +129,7 @@ describe("transform_acorn", () => {
     assert.match(res.trim(), litd`
     dog = ${uuid} = () => {
       let [${uuid}] = global.__logarg("file:6");
-      return global.__logret("file:6", ${uuid}, ${uuid}, 'dog');
+      return global.__logret(${uuid}, ${uuid}, 'dog');
     };`)
   })
 
@@ -139,7 +139,7 @@ describe("transform_acorn", () => {
     function* dog() {
       let [${uuid}] = global.__logarg("file:0");
       yield global.__logyield(${uuid}, 5);
-      return global.__logret("file:0", ${uuid}, dog, undefined);
+      return global.__logret(${uuid}, dog, undefined);
     }`)
   })
 
@@ -149,7 +149,7 @@ describe("transform_acorn", () => {
     function* dog() {
       let [${uuid}] = global.__logarg("file:0");
       yield* global.__logdelyield(${uuid}, [5]);
-      return global.__logret("file:0", ${uuid}, dog, undefined);
+      return global.__logret(${uuid}, dog, undefined);
     }`)
   })
 })

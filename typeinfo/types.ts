@@ -4,15 +4,15 @@ import { locate } from "../utils/function_location.ts"
 import type { Location } from "../utils/function_location.ts"
 import { ObjectFunction } from "./constructor_library.ts"
 import { combine_traces, combine_types } from "./combine.ts"
-import { calls, funcref_trace_map, objref_objti_map } from "../instrument/trace.ts"
-
-// references linked to a FunctionTI
-export const function_typeinfo_map: WeakMap<Function, FunctionTI> = new WeakMap()
+import { funcref_trace_map, objref_objti_map } from "../instrument/trace.ts"
 
 // property id for wrapping
 export const WRAP_PARAMID = crypto.randomUUID()
 
-export function compute_typeinfo(t: any, refs?: WeakMap<any, TypeInfo>): TypeInfo {
+// t is the type we want to compute the TypeInfo object for
+// loc is for ClassTIs to know where they need to be imported
+// refs is for ObjectTIs to handle cyclic objects
+export function compute_typeinfo(t: any, loc: string, refs?: WeakMap<any, TypeInfo>): TypeInfo {
   if (refs === undefined) refs = new WeakMap()
   switch (typeof t) {
     case "object":
@@ -24,14 +24,14 @@ export function compute_typeinfo(t: any, refs?: WeakMap<any, TypeInfo>): TypeInf
       // TODO: add cases for array, class, object without class, primitive classes vs. imported, etc 
       // determine if there's a more specific case of object we can use or if it's just an object
       // if Array.isArray we're an array
-      if (Array.isArray(t)) return new ArrayTI(t, refs)
+      if (Array.isArray(t)) return new ArrayTI(t, loc, refs)
 
       // if we have a constructor in the protype this is our class
-      if (Object.getPrototypeOf(t).constructor !== ObjectFunction) return new ClassTI(t)
+      if (Object.getPrototypeOf(t).constructor !== ObjectFunction) return ClassTI.get(t, loc)
       
-      return new ObjectTI(t, refs)
+      return new ObjectTI(t, loc, refs)
     case "function":
-      return new FunctionRefTI(t)
+      return FunctionTI.get(t)
     default:
       return new PrimitiveTI(t)
   }
@@ -87,37 +87,24 @@ export class PrimitiveTI implements TypeInfo {
     return this.type
   }
 }
-export class FunctionRefTI implements TypeInfo {
-  type: "functionref"
-  ref: Function
-  constructor(t: Function) {
-    this.type = "functionref"
-    this.ref = t
-    if (!function_typeinfo_map.has(t)) {
-      function_typeinfo_map.set(t, new FunctionTI(t))
-    }
-  }
-  get location() {
-    return function_typeinfo_map.get(this.ref)!.location
-  }
-  get traces() {
-    return function_typeinfo_map.get(this.ref)!.traces
-  }
-  get uuid() {
-    return function_typeinfo_map.get(this.ref)!.uuid
-  }
-  toUnique() {
-    return this.uuid
-  }
-  toTypeString(text: string, level: number) {
-    return function_typeinfo_map.get(this.ref)!.toTypeString(text, level)
-  }
-}
+
 export class FunctionTI implements TypeInfo {
+
+  // we only ever have one FunctionTI for each function
+  static function_typeinfo_map: WeakMap<Function, FunctionTI> = new WeakMap()
+  static get(f: Function): FunctionTI {
+    if (!this.function_typeinfo_map.has(f)) this.function_typeinfo_map.set(f, new FunctionTI(f))
+    return this.function_typeinfo_map.get(f)!
+  }
+  static location_promises: (() => Promise<void>)[] = []
+  static async get_locations() {
+    await Promise.all(this.location_promises.map(f => f()))
+  }
+
+  
   // TODO: it's probably bad to have this as a promise
   // not sure yet how to resolve the async
-  location_promise: Promise<void>
-  location: Location|undefined
+  location?: Location
   traces: TraceSet
   uuid: string
   type: "function"
@@ -139,10 +126,7 @@ export class FunctionTI implements TypeInfo {
       funcref_trace_map.set(t, this.traces)
     }
     
-    this.location_promise = new Promise(async resolve => {
-      this.location = await locate(t)
-      resolve()
-    })
+    FunctionTI.location_promises.push(async () => { this.location = await locate(t) })
   }
   toUnique() {
     return this.uuid
@@ -169,7 +153,7 @@ export class FunctionTI implements TypeInfo {
 export class ObjectTI implements TypeInfo {
   params: Map<string|symbol, TypeInfo>
   type: "object"
-  constructor(t: Object, refs: WeakMap<any, TypeInfo>) {
+  constructor(t: Object, loc: string, refs: WeakMap<any, TypeInfo>) {
     if (objref_objti_map.has(t)) return objref_objti_map.get(t)!
     objref_objti_map.set(t, this)
     
@@ -178,7 +162,7 @@ export class ObjectTI implements TypeInfo {
 
     refs.set(t, this)
     for (const key of Object.keys(t)) {
-      this.params.set(key, compute_typeinfo(t[key], refs))
+      this.params.set(key, compute_typeinfo(t[key], loc, refs))
     }
   }
   
@@ -307,9 +291,9 @@ export class ObjectTI implements TypeInfo {
 export class ArrayTI implements TypeInfo {
   elemtypes: TypeInfo[]
   type: "array"
-  constructor(t: any[], refs: WeakMap<any, TypeInfo>) {
+  constructor(t: any[], loc: string, refs: WeakMap<any, TypeInfo>) {
     this.type = "array"
-    this.elemtypes = t.map(a => compute_typeinfo(a, refs))
+    this.elemtypes = t.map(a => compute_typeinfo(a, loc, refs))
   }
   toUnique() {
     return `(${this.elemtypes.map(a => a.toUnique()).join("|")})[]`
@@ -326,13 +310,34 @@ export class ArrayTI implements TypeInfo {
 // TODO: add type params
 // TODO: somehow tell thing to import it and generate .ts.d if not existing
 export class ClassTI implements TypeInfo {
-  location: Promise<Location|undefined>
+
+  static constructor_typeinfo_map: WeakMap<Function, ClassTI> = new WeakMap()
+  static file_classti_map: Map<string, Set<ClassTI>> = new Map()
+  static get(t: Object, loc: string): ClassTI {
+    const c = Object.getPrototypeOf(t).constructor
+    if (!this.constructor_typeinfo_map.has(c)) this.constructor_typeinfo_map.set(c, new ClassTI(t))
+
+    // locations are in the form fname:lineno so extract fname
+    const fname = loc.split(/:.*$/)[0]
+    const cti = this.constructor_typeinfo_map.get(c)!
+
+    if (!this.file_classti_map.has(fname)) this.file_classti_map.set(fname, new Set())
+    this.file_classti_map.get(fname)!.add(cti)
+
+    return cti
+  }
+  static location_promises: (() => Promise<void>)[] = []
+  static async get_locations() {
+    await Promise.all(this.location_promises.map(f => f()))
+  }
+  
+  location?: Location
   name: string
   type: "class"
   constructor(t: Object) {
     this.type = "class"
-    this.location = locate(Object.getPrototypeOf(t).constructor)
     this.name = t.constructor.name
+    ClassTI.location_promises.push(async () => { this.location = await locate(Object.getPrototypeOf(t).constructor) })
   }
   toUnique() {
     return this.toString()
@@ -341,7 +346,6 @@ export class ClassTI implements TypeInfo {
     return ts.factory.createTypeReferenceNode(this.name, [])
   }
   toTypeString() {
-    // TODO: we also have to import this name
     return this.name
   }
 }
@@ -371,9 +375,11 @@ export class Trace {
   args: TypeInfo[]
   yields: TypeInfo[]
   returns: TypeInfo
-  constructor(args: any[]) {
+  location: string
+  constructor(args: any[], loc: string) {
     // TODO: can we do this computation in a worker thread so collecting traces isn't blocking
-    this.args = args.map(a => compute_typeinfo(a))
+    this.location = loc
+    this.args = args.map(a => compute_typeinfo(a, loc))
     this.yields = []
     this.returns = new PrimitiveTI(undefined)
   }
