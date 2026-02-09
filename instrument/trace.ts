@@ -1,3 +1,4 @@
+import type { TypeInfo } from "../typeinfo/types.ts"
 import { Trace, TraceSet, compute_typeinfo, FunctionTI, ObjectTI, WRAP_PARAMID } from "../typeinfo/types.ts"
 import { combine_types } from "../typeinfo/combine.ts"
 import { ObjectFunction, GeneratorFunction } from "../typeinfo/constructor_library.ts"
@@ -26,20 +27,24 @@ function wrap_function(f: Function, loc: string): Function {
     const wrapped = function(...args: any[]) {
       const trace = new Trace(args, loc)
       fti.traces.add(trace)
+      args = args.map((arg, i) => process_argument(arg, trace.args[i], loc))
       const res = f(...args)
 
       // if we're not a generator just profile the return
-      if (typeof res !== "object" || res instanceof GeneratorFunction) {
+      // if (typeof res !== "object" || (res instanceof GeneratorFunction)) {
+      if (!(f.constructor instanceof GeneratorFunction)) {
         trace.returns = compute_typeinfo(res, loc)
-        return res
+        return process_argument(res, trace.returns, loc)
       }
 
       // otherwise we have to wrap the generator in the same way
       const _next = res.next
       res.next = function(...b: any[]) {
         const next: { value: any, done?: boolean } = _next(...b)
-        if (!next.done) trace.yields.push(compute_typeinfo(next.value, loc))
-        else trace.returns = compute_typeinfo(next.value, loc)
+        const ti = compute_typeinfo(next.value, loc)
+        if (!next.done) trace.yields.push(ti)
+        else trace.returns = ti
+        next.value = process_argument(next.value, ti, loc)
         return next
       }
       return res
@@ -69,6 +74,17 @@ function wrap_object(o: Object, oti: ObjectTI, loc: string): Object {
   return proxy
 }
 
+function process_argument(arg: any, typeinfo: TypeInfo, loc: string) {
+    if (typeof arg === "function") return wrap_function(arg, loc)
+    if (typeof arg === "object" && arg !== null) {
+      // we wanna wrap objects whose constructor is ``object''
+      // TODO: do something about classes
+      if (Object.getPrototypeOf(arg).constructor === ObjectFunction && !arg[WRAP_PARAMID])
+        return wrap_object(arg, typeinfo as ObjectTI, loc)
+    }
+    return arg
+  
+}
 
 global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...any[]] {
   if (!shouldprofile(loc)) return [undefined, ...args]
@@ -78,17 +94,7 @@ global.__logarg = function(loc: string, ...args: any[]): [string|undefined, ...a
   
 
   // wrap all of our arguments as needed
-  args = args.map((arg, i) => {
-    if (typeof arg === "function") return wrap_function(arg, loc)
-    if (typeof arg === "object" && arg !== null) {
-      // we wanna wrap objects whose constructor is ``object''
-      // TODO: do something about classes
-      if (Object.getPrototypeOf(arg).constructor === ObjectFunction && !arg[WRAP_PARAMID])
-        return wrap_object(arg, inflight[callid].args[i] as ObjectTI, loc)
-    }
-    return arg
-  })
-  
+  args = args.map((arg, i) => process_argument(arg, inflight[callid].args[i], loc))
   return [callid, ...args]
 }
 
@@ -98,6 +104,8 @@ global.__logret = function(callid: string|undefined, f: Function, val?: any): an
   // bank inflight[callid], cleanup
   let loc = inflight[callid].location
   inflight[callid].returns = compute_typeinfo(val, loc)
+
+  val = process_argument(val, inflight[callid].returns, inflight[callid].location)
   
   // if we're in the rare case that we call a function whose reference we can't get
   // users should not be able to get it either, so we just don't set funcref_trace_map
@@ -132,7 +140,9 @@ global.__logret = function(callid: string|undefined, f: Function, val?: any): an
 global.__logyield = function(callid: string|undefined, val: any): any {
   if (callid === undefined) return val
   
-  inflight[callid].yields.push(compute_typeinfo(val, inflight[callid].location))
+  const typeinfo = compute_typeinfo(val, inflight[callid].location)
+  inflight[callid].yields.push(typeinfo)
+  val = process_argument(val, typeinfo, inflight[callid].location)
   return val
 }
 
@@ -147,9 +157,11 @@ global.__logdelyield = function<T>(callid: string|undefined, val: Generator<T>):
     iter.next = function(...a: any[]) {
       const next: { value: T, done?: boolean } = _next.call(iter, ...a)
       const trace = inflight[callid]
+      const ti = compute_typeinfo(next.value, trace.location)
       
-      if (!next.done) trace.yields.push(compute_typeinfo(next.value, trace.location))
-      else trace.returns = compute_typeinfo(next.value, trace.location)
+      if (!next.done) trace.yields.push(ti)
+      else trace.returns = ti
+      next.value = process_argument(next.value, ti, inflight[callid].location)
       return next
     }
     return iter

@@ -8,24 +8,33 @@ import dedent from "dedent-js"
 import path from "path"
 
 let tmpdir: string|undefined = undefined
+function set_tempdir() {
+  if (tmpdir === undefined) tmpdir = path.join(os.tmpdir(), "thesis")
+  if (!fs.existsSync(tmpdir!)) fs.mkdirSync(tmpdir!)
+}
+
 function setup() {
-  tmpdir = path.join(os.tmpdir(), "thesis")
-  fs.rmSync(tmpdir, { recursive: true, force: true })
-  fs.mkdirSync(tmpdir)
+  set_tempdir()
+  fs.rmSync(tmpdir!, { recursive: true, force: true })
+  fs.mkdirSync(tmpdir!)
 
   // symlink node_modules and package.json
-  fs.symlinkSync("./dummy_node_modules", path.join(tmpdir, "node_modules"), "dir")
-  fs.symlinkSync("./dummy_package.json", path.join(tmpdir, "package.json"), "dir")
+  // fs.symlinkSync(path.join(import.meta.dirname, "dummy_node_modules"), path.join(tmpdir!, "node_modules"), "dir")
+  // fs.symlinkSync(path.join(import.meta.dirname, "dummy_package.json"), path.join(tmpdir!, "package.json"), "dir")
+  fs.cpSync(path.join(import.meta.dirname, "dummy_node_modules"), path.join(tmpdir!, "node_modules"), {recursive: true})
+  fs.cpSync(path.join(import.meta.dirname, "dummy_package.json"), path.join(tmpdir!, "package.json"), {recursive: true})
+  fs.writeFileSync(path.join(tmpdir!, "package.json"), `{"name": "test", "main": "1.js", "type": "module"}`)
 }
 
 function teardown() {
   // unlink and delete
-  fs.unlinkSync(path.join(tmpdir!, "node_modules"))
-  fs.unlinkSync(path.join(tmpdir!, "package.json"))
+  // fs.unlinkSync(path.join(tmpdir!, "node_modules"))
+  // fs.unlinkSync(path.join(tmpdir!, "package.json"))
   fs.rmSync(tmpdir!, { recursive: true, force: true })
 }
 
 function run_self(text: string, ...others: string[]) {
+  set_tempdir()
   let path = tmpdir!+"/1.js"
   fs.writeFileSync(path, text)
   
@@ -40,9 +49,6 @@ function run_self(text: string, ...others: string[]) {
 
 describe("basic integration tests", () => {
 
-  before(setup)
-  after(teardown)
-  
   it("should handle primitives", () => {
     let [out, _] = run_self(dedent(`
     function f(a) { return }
@@ -72,15 +78,20 @@ describe("basic integration tests", () => {
     function f(a) { return }
     f([1, 2, 3])`))
 
+  console.log(out)
+
     assert.equal(out.split("\n")[1], "function f(a: number[]) { return }")
+  })
+
+  it("should handle tuples", {skip: true}, () => {
+    // if something is always called with the same types in the same order and it's less 
+    // than a threshold (say 5) it should be a tuple rather than a list
+    assert.fail()
   })
 
 })
 describe("integration tests for iterators", () => {
 
-  before(setup)
-  after(teardown)
-  
   it("should handle generators", () => {
     let [out, _] = run_self(dedent(`
     function* f() { yield 3; return "hi" }
@@ -110,9 +121,6 @@ describe("integration tests for iterators", () => {
 
 describe("integration tests for higher order functions", () => {
 
-  before(setup)
-  after(teardown)
-    
   it("should handle functions", () => {
     let [out, _] = run_self(dedent(`
     function f(a) { a("hi") }
@@ -139,9 +147,6 @@ describe("integration tests for higher order functions", () => {
   
 describe("integration tests for objects", () => {
 
-  before(setup)
-  after(teardown)
-  
   it("should handle easy objects", () => {
     let [out, _] = run_self(dedent(`
     function f(a) { return a }
@@ -170,8 +175,6 @@ describe("integration tests for objects", () => {
 
 describe("integration tests for classes", () => {
 
-  before(setup)
-  after(teardown)
 
   it("should handle simple builtin classes", () => {
     let [out, _] = run_self(dedent(`
@@ -261,10 +264,68 @@ describe("integration tests for classes", () => {
   })
 
   
-  it("should annotate parameters", () => {
-    
+  it("should annotate parameters", {skip: true}, () => {
+    assert.fail()
   })
 
+})
+
+describe("import from node_modules", () => {
+  
+  before(setup)
+  after(teardown)
+
+  it("should import from node_modules", () => {
+    let [out, _] = run_self(dedent(`
+    import { makeDog } from "simple_main";
+    function f() { return makeDog() }
+    f();`))
+
+    assert.equal(out.split("\n").slice(1, -2).join("\n"), dedent(`
+    import type { Dog } from "simple_main";
+    import { makeDog } from "simple_main";
+    function f(): Dog { return makeDog() }
+    f();`))
+  })
+
+  it("should import from node_modules with complex exports", () => {
+    let [out, _] = run_self(dedent(`
+    import { makeDog, makeDogSync } from "simple_exports";
+    function f() { return makeDog() }
+    function g() { return makeDogSync() }
+    f();
+    g();`))
+
+    assert.equal(out.split("\n").slice(1, -2).join("\n"), dedent(`
+    import type { Dog } from "simple_exports";
+    import type { DogSync } from "simple_exports/sync";
+    import { makeDog, makeDogSync } from "simple_exports";
+    function f(): Dog { return makeDog() }
+    function g(): DogSync { return makeDogSync() }
+    f();
+    g();`))
+  })
+
+  it("should import from node_modules even if we don't have an export", {skip: true}, () => {
+    assert.fail()
+  })
+
+  it("should profile functions from node_modules", () => {
+    let [out, _] = run_self(dedent(`
+    import { makeDog } from "simple_main";
+    function f() { return makeDog }
+    function g() { return f()() }
+    g();`))
+
+    assert.equal(out.split("\n").slice(1, -2).join("\n"), dedent(`
+    import type { Dog } from "simple_main";
+    import { makeDog } from "simple_main";
+    function f(): () => Dog { return makeDog }
+    function g(): Dog { return f()() }
+    g();`))
+  })
+
+  
  
 })
 

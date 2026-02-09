@@ -7,7 +7,7 @@ export function combine_traces(traces: Trace[]): Trace {
   // TODO: do generics
   
   // otherwise try to combine types in a trace
-  let result = new Trace([])
+  let result = new Trace([], traces[0].location)
   let maxargs = Math.max(...traces.map(t => t.args.length))
 
   for (let i=0; i<maxargs; i++) {
@@ -26,6 +26,7 @@ export function combine_traces(traces: Trace[]): Trace {
 // TODO: implement
 export function combine_types(types: TypeInfo[]): TypeInfo {
   if (types.length == 0) return new PrimitiveTI(undefined)
+
   let first = types[0].toUnique()
   if (types.every(a => first === a.toUnique())) return types[0]
   

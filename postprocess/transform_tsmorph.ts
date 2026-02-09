@@ -139,8 +139,8 @@ function compute_import(filepath: string, abspath: string): string {
   //
   // if it's neither exports nor main, we need to direct import.
   // if in any of the above situations it's an internal class, we need to add a d.ts file to add a public type for that class
-  const mod_re = new RegExp(`(.*\\${path.sep})node_modules\\${path.sep}(.*?)(\\${path.sep}.*)(\\..*?$)`)
-  const [_, basepath, modname, sourcepath, extension] = mod_re.exec(filepath)!
+  const mod_re = new RegExp(`(.*\\${path.sep})node_modules\\${path.sep}(.*?)\\${path.sep}(.*)(\\..*?$)`)
+  const [_, basepath, modname, sourcepath, extension] = mod_re.exec(abspath)!
   const pkgjson = get_pkgjson(basepath, modname)
 
   // if we have exports and filepath in exports
@@ -156,8 +156,8 @@ function compute_import(filepath: string, abspath: string): string {
     return modname
   }
   
-  // otherwise die
-  throw new Error(`could not compute import for ${filepath}`)
+  // if we could not compute the modspec at all we need to just use abspath
+  return path.relative(filepath, abspath)
 }
 
 function add_imports(source: SourceFile, filepath: string, imports: Map<string, Set<string>>) {
