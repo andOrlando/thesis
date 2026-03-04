@@ -64,9 +64,10 @@ function wrap_object(o: Object, oti: ObjectTI, loc: string): Object {
      
       const ti = compute_typeinfo(v, loc)
       // if we don't already have a typeinfo for this it didn't exist before, so and it with undefined
-      const other = oti.params.has(p) ? oti.params.get(p)! : compute_typeinfo(undefined, loc)
+      const other = Reflect.has(oti.params, p) ? Reflect.get(oti.params, p)! : compute_typeinfo(undefined, loc)
       
-      oti.params.set(p, combine_types([ti, other]))
+      // TODO: this should probably be differentiated from params at the start of the function?
+      oti.params[p] = combine_types([ti, other])
       return Reflect.set(t, p, v, reciever)
     }
   })

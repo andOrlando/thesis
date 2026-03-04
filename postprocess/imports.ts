@@ -1,90 +1,6 @@
-import { Project, Node, SourceFile } from "ts-morph"
-import type { ImportDeclarationStructure, OptionalKind } from "ts-morph"
-import fs from "node:fs"
-import * as path from "path"
-import { calls } from "../instrument/trace.ts"
-import { combine_traces, combine_types } from "../typeinfo/combine.ts"
-import { ClassTI } from "../typeinfo/types.ts"
-
-
-export function transform(filename: string) {
-  const project = new Project()
-  const source = project.createSourceFile(filename, fs.readFileSync(filename).toString(), {overwrite: true})
-  const indentation = source.getIndentationText()
-  const imports: Map<string, Set<string>> = new Map()
-  // console.log(calls)
-
-  const node_location_map: WeakMap<Node, string> = new WeakMap()
-
-  source.forEachDescendant((node, _traversal) => {
-    if (!(
-      Node.isFunctionDeclaration(node) ||
-      Node.isFunctionExpression(node) ||
-      Node.isArrowFunction(node) ||
-      Node.isMethodDeclaration(node) ||
-      Node.isConstructorDeclaration(node) ||
-      Node.isGetAccessorDeclaration(node) ||
-      Node.isSetAccessorDeclaration(node)
-    )) return
-
-    node_location_map.set(node, `${filename}:${node.getStart(true)}`)
-      
-  })
-
-  
-  source.forEachDescendant((node, _traversal) => {
-    if (!(
-      Node.isFunctionDeclaration(node) ||
-      Node.isFunctionExpression(node) ||
-      Node.isArrowFunction(node) ||
-      Node.isMethodDeclaration(node) ||
-      Node.isConstructorDeclaration(node) ||
-      Node.isGetAccessorDeclaration(node) ||
-      Node.isSetAccessorDeclaration(node)
-    )) return
-
-    const location = node_location_map.get(node)
-    if (location === undefined || calls[location] === undefined) return node // we haven't annotated
-    let trace = combine_traces(calls[location].traces)
-    let level = node.getIndentationLevel();
-
-    // add all class types to imports if need be
-    for (const ti of [...trace.args, trace.returns, ...trace.yields]) {
-      if (!(ti instanceof ClassTI)) continue
-      // can skip classes without locations
-      if (ti.location === undefined) continue
-
-      const fname = ti.location!.location
-      if (fname == filename) continue
-      if (!imports.has(fname)) imports.set(fname, new Set())
-      imports.get(fname)!.add(ti.name)
-    }
-    
-    let i=0
-    node.getParameters().forEach((param, i) => {
-      // TODO: if we're array destructuring do something
-      
-      param.setType(trace.args[i].toTypeString(indentation, level))
-    })
-
-    // set return type
-    // TODO: do generators
-    if (trace.yields.length !== 0) {
-      let gen = [combine_types(trace.yields).toTypeString(indentation, level)]
-      if (trace.returns.type !== "undefined") gen.push(trace.returns.toTypeString(indentation, level))
-      node.setReturnType(`Generator<${gen.join(", ")}>`)
-      return
-    }
-
-    if (trace.returns.type !== "undefined") node.setReturnType(trace.returns.toTypeString(indentation, level))
-    // }
-
-  })
-  
-  // add_imports(source, path.dirname(filename), imports)
-  add_imports(source, path.dirname(filename)+path.sep, imports)
-  return source.getFullText()
-}
+import path from "node:path";
+import * as fs from "fs"
+import { SourceFile } from "ts-morph";
 
 const module_pkgjson: Map<string, Object> = new Map();
 function get_pkgjson(basepath: string, modname: string): Object {
@@ -160,10 +76,10 @@ function compute_import(filepath: string, abspath: string): string {
   return path.relative(filepath, abspath)
 }
 
-function add_imports(source: SourceFile, filepath: string, imports: Map<string, Set<string>>) {
+export function add_imports(source: SourceFile, filepath: string, imports: Map<string, Set<string>>) {
   const old_imports = source.getImportDeclarations()
   const last_import = imports[old_imports.length-1]
-  const new_imports: OptionalKind<ImportDeclarationStructure>[] = []
+  const new_imports: any[] = []
 
   for (const [abspath, names] of imports.entries()) {
     const modspec = compute_import(filepath, abspath)
@@ -180,6 +96,4 @@ function add_imports(source: SourceFile, filepath: string, imports: Map<string, 
 
   source.insertImportDeclarations(last_import ? last_import.getChildIndex() : 0, new_imports)
 }
-
-
 

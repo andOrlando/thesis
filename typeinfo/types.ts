@@ -9,6 +9,11 @@ import { funcref_trace_map, objref_objti_map } from "../instrument/trace.ts"
 // property id for wrapping
 export const WRAP_PARAMID = crypto.randomUUID()
 
+// consts for when to line break objects with many params
+// TODO: let user set these
+const OBJSTRING_MAX_LENGTH_BEFORE_LINEBREAK=40
+const OBJSTRING_MAX_PARAMS_BEFORE_LINEBREAK=4
+
 // t is the type we want to compute the TypeInfo object for
 // loc is for ClassTIs to know where they need to be imported
 // refs is for ObjectTIs to handle cyclic objects
@@ -21,15 +26,15 @@ export function compute_typeinfo(t: any, loc: string, refs?: WeakMap<any, TypeIn
       // if we've seen this reference before, make it circular
       if (refs.has(t)) return refs.get(t)!
       
-      // TODO: add cases for array, class, object without class, primitive classes vs. imported, etc 
+      // TODO: add cases for: primitive classes(?), Record, Tuple
       // determine if there's a more specific case of object we can use or if it's just an object
       // if Array.isArray we're an array
-      if (Array.isArray(t)) return new ArrayTI(t, loc, refs)
+      if (Array.isArray(t)) return ArrayTI.fromArray(t, loc, refs)
 
       // if we have a constructor in the protype this is our class
       if (Object.getPrototypeOf(t).constructor !== ObjectFunction) return ClassTI.get(t, loc)
       
-      return new ObjectTI(t, loc, refs)
+      return ObjectTI.fromObject(t, loc, refs)
     case "function":
       return FunctionTI.get(t)
     default:
@@ -53,35 +58,6 @@ export class PrimitiveTI implements TypeInfo {
   }
   toUnique() {
     return this.type
-  }
-  toAst() {
-    let kind: number
-    switch (this.type) {
-      case "string":
-        kind = ts.SyntaxKind.StringKeyword
-        break
-      case "number":
-        kind = ts.SyntaxKind.NumberKeyword
-        break
-      case "bigint":
-        kind = ts.SyntaxKind.BigIntKeyword
-        break
-      case "boolean":
-        kind = ts.SyntaxKind.BooleanKeyword
-        break
-      case "undefined":
-        kind = ts.SyntaxKind.UndefinedKeyword
-        break
-      case "symbol":
-        throw new Error("TODO: what's the kind for a symbol")
-      case "null":
-        kind = ts.SyntaxKind.NullKeyword
-        break
-      default:
-        throw new Error("unreachable")
-    }
-
-    return ts.factory.createKeywordTypeNode(kind)
   }
   toTypeString() {
     return this.type
@@ -151,19 +127,25 @@ export class FunctionTI implements TypeInfo {
 }
 
 export class ObjectTI implements TypeInfo {
-  params: Map<string|symbol, TypeInfo>
+  params: {[key: string|symbol]: TypeInfo}
   type: "object"
-  constructor(t: Object, loc: string, refs: WeakMap<any, TypeInfo>) {
-    if (objref_objti_map.has(t)) return objref_objti_map.get(t)!
-    objref_objti_map.set(t, this)
-    
-    this.type = "object"
-    this.params = new Map()
 
-    refs.set(t, this)
+  constructor(params: {[key: string|symbol]: TypeInfo}) {
+    this.type = "object"
+    this.params = params
+  }
+
+  static fromObject(t: Object, loc: string, refs: WeakMap<any, TypeInfo>): ObjectTI {
+    let oti = new ObjectTI({})
+    
+    if (objref_objti_map.has(t)) return objref_objti_map.get(t)!
+    objref_objti_map.set(t, oti)
+    refs.set(t, oti)
     for (const key of Object.keys(t)) {
-      this.params.set(key, compute_typeinfo(t[key], loc, refs))
+      oti.params[key] = compute_typeinfo(t[key], loc, refs)
     }
+
+    return oti
   }
   
   // we can cache tostring because these are effectively frozen
@@ -182,7 +164,7 @@ export class ObjectTI implements TypeInfo {
         return
       }
       seen.add(obj)
-      for (const child of obj.params.values()) {
+      for (const [_, child] of Object.entries(obj.params)) {
         if (!(child instanceof ObjectTI)) continue
         visit(child)
       }
@@ -197,8 +179,8 @@ export class ObjectTI implements TypeInfo {
     // arrow function because we need to preserve `this`
     const _toUnique = (obj: ObjectTI) => {
       const params: string[] = []
-      for (const key of obj.params.keys()) {
-        const value = obj.params.get(key)!
+      for (const key of Reflect.ownKeys(obj.params)) {
+        const value = obj.params[key]!
         if (!(value instanceof ObjectTI)) {
           params.push(`${String(key)}:${value.toUnique()}`)
           continue
@@ -242,13 +224,12 @@ export class ObjectTI implements TypeInfo {
 
       // otherwise we can do it as normal
       // threshold for readability is >4 params or any param is >40 characters
-      // TODO: make this an option
 
       let types: Record<string|symbol, string> = {}
       let questionmark: (string|symbol)[] = []
-      for (const key of node.params.keys()) {
+      for (const key of Reflect.ownKeys(node.params)) {
         // if we have an object that's undefined|something then we do some extra special stuff
-        let typ = node.params.get(key)
+        let typ = node.params[key]
         if (typ instanceof UnionTI && typ.types.types.some(t => t.type === "undefined")) {
           typ = new UnionTI(typ.types.types.filter(t => t.type !== "undefined"))
           questionmark.push(key)
@@ -265,7 +246,9 @@ export class ObjectTI implements TypeInfo {
 
       // TODO: print keys in order that they're seen in destructuring?
       let keys = Object.keys(types)
-      if (keys.some(a => a.length > 40) || keys.length > 4) {
+      if (keys.some(a => a.length > OBJSTRING_MAX_LENGTH_BEFORE_LINEBREAK)
+        || keys.length > OBJSTRING_MAX_PARAMS_BEFORE_LINEBREAK)
+      {
         // we need to indent which in practice means line breaking with \n+\t*level after the first open bracket until the last close bracket, which gets \n+\t*(level-1)
         return Object.entries(types).map(([key, value]: [string, string], i) => {
           // indent everything below
@@ -291,9 +274,12 @@ export class ObjectTI implements TypeInfo {
 export class ArrayTI implements TypeInfo {
   elemtypes: TypeInfo[]
   type: "array"
-  constructor(t: any[], loc: string, refs: WeakMap<any, TypeInfo>) {
+  constructor(elemtypes: TypeInfo[]) {
     this.type = "array"
-    this.elemtypes = t.map(a => compute_typeinfo(a, loc, refs))
+    this.elemtypes = elemtypes
+  }
+  static fromArray(t: any[], loc: string, refs: WeakMap<any, TypeInfo>): ArrayTI {
+    return new ArrayTI(t.map((a: any) => compute_typeinfo(a, loc, refs)))
   }
   toUnique() {
     return `(${this.elemtypes.map(a => a.toUnique()).join("|")})[]`
@@ -304,6 +290,22 @@ export class ArrayTI implements TypeInfo {
     return `(${type.toTypeString(text, level)})[]`
   }
 }
+
+export class TupleTI implements TypeInfo {
+  elems: TypeInfo[]
+  type: "tuple"
+  constructor(elems: TypeInfo[]) {
+    this.type = "tuple"
+    this.elems = elems
+  }
+  toUnique() {
+    return `[${this.elems.map(a => a.toUnique()).join(",")}]`
+  }
+  toTypeString(text: string, level: number) {
+    return `[${this.elems.map(a => a.toTypeString(text, level)).join(", ")}]`
+  }
+}
+
 
 // special case of ObjectTI where we accumulate with respect to
 // the function hash in a WeakMap, similar to what we do for functions
@@ -346,6 +348,7 @@ export class ClassTI implements TypeInfo {
     return ts.factory.createTypeReferenceNode(this.name, [])
   }
   toTypeString() {
+    // TODO: add generics somehow
     return this.name
   }
 }
@@ -369,6 +372,21 @@ export class UnionTI implements TypeInfo {
 }
 
 
+export class GenericTI implements TypeInfo {
+  index: number
+  type: "generic"
+  constructor(index: number) {
+    this.type = "generic"
+    this.index= index
+  }
+  toUnique() {
+    return `T${this.index}`
+  }
+  toTypeString() {
+    return `T${this.index}`
+  }
+}
+
 
 
 export class Trace {
@@ -383,6 +401,8 @@ export class Trace {
     this.yields = []
     this.returns = new PrimitiveTI(undefined)
   }
+  
+  
   toUnique() {
     return `[${this.args.map(a => a.toUnique()).join(",")}],[${this.yields.map(a => a.toUnique()).join(",")}],${this.returns.toUnique()}`
   }

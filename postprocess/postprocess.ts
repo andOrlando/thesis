@@ -1,5 +1,5 @@
 // import { transform } from "./transform.ts"
-import { transform } from "./transform_tsmorph.ts"
+import { transform } from "./transform.ts"
 
 export const OutputMethods = {
   PRINT: "print",

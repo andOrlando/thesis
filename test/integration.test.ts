@@ -78,8 +78,6 @@ describe("basic integration tests", () => {
     function f(a) { return }
     f([1, 2, 3])`))
 
-  console.log(out)
-
     assert.equal(out.split("\n")[1], "function f(a: number[]) { return }")
   })
 
@@ -162,6 +160,7 @@ describe("integration tests for objects", () => {
       return a
     }
     f({a: 1})`))
+  console.log(_)
 
     assert.equal(out.split("\n").slice(1, -2).join("\n"), dedent(`
     function f(a: { a: number, b?: number }): { a: number, b?: number } {

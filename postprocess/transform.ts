@@ -1,124 +1,89 @@
-//https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API
-import ts from "typescript"
-import { readFileSync } from "fs"
+import fs from "node:fs"
+import * as path from "path"
+import { Project, Node } from "ts-morph"
+import { ClassTI } from "../typeinfo/types.ts"
+import { combine_traces, combine_types } from "../typeinfo/combine.ts"
 import { calls } from "../instrument/trace.ts"
-import { combine_traces } from "../typeinfo/combine.ts"
+import { add_imports } from "./imports.ts"
 
-const transformer = <T extends ts.Node>(context: ts.TransformationContext) => (root: T) => {
-  const source = root.getSourceFile()
-  const filename = source.fileName
+
+export function transform(filename: string) {
+  const project = new Project()
+  const source = project.createSourceFile(filename, fs.readFileSync(filename).toString(), {overwrite: true})
+  const indentation = source.getIndentationText()
+  const imports: Map<string, Set<string>> = new Map()
+  // console.log(calls)
+
+  const node_location_map: WeakMap<Node, string> = new WeakMap()
+
+  source.forEachDescendant((node, _traversal) => {
+    if (!(
+      Node.isFunctionDeclaration(node) ||
+      Node.isFunctionExpression(node) ||
+      Node.isArrowFunction(node) ||
+      Node.isMethodDeclaration(node) ||
+      Node.isConstructorDeclaration(node) ||
+      Node.isGetAccessorDeclaration(node) ||
+      Node.isSetAccessorDeclaration(node)
+    )) return
+
+    node_location_map.set(node, `${filename}:${node.getStart(true)}`)
+      
+  })
+
   
-  function visit(node: ts.Node) {
-    node = ts.visitEachChild(node, visit, context)
+  source.forEachDescendant((node, _traversal) => {
+    if (!(
+      Node.isFunctionDeclaration(node) ||
+      Node.isFunctionExpression(node) ||
+      Node.isArrowFunction(node) ||
+      Node.isMethodDeclaration(node) ||
+      Node.isConstructorDeclaration(node) ||
+      Node.isGetAccessorDeclaration(node) ||
+      Node.isSetAccessorDeclaration(node)
+    )) return
+
+    const location = node_location_map.get(node)
+    if (location === undefined || calls[location] === undefined) return node // we haven't annotated
+    let trace = combine_traces(calls[location].traces)
+    let level = node.getIndentationLevel();
+
+    // add all class types to imports if need be
+    for (const ti of [...trace.args, trace.returns, ...trace.yields]) {
+      if (!(ti instanceof ClassTI)) continue
+      // can skip classes without locations
+      if (ti.location === undefined) continue
+
+      const fname = ti.location!.location
+      if (fname == filename) continue
+      if (!imports.has(fname)) imports.set(fname, new Set())
+      imports.get(fname)!.add(ti.name)
+    }
     
-    if ([
-      ts.SyntaxKind.FunctionDeclaration,
-      ts.SyntaxKind.FunctionExpression,
-      ts.SyntaxKind.ArrowFunction,
-      ts.SyntaxKind.MethodDeclaration,
-      ts.SyntaxKind.Constructor,
-      ts.SyntaxKind.GetAccessor,
-      ts.SyntaxKind.SetAccessor
-    ].includes(node.kind)) {
-        // has this function been seen before
-        
-        const location = `${filename}:${node.getStart(source, true)}`
-        if (calls[location] === undefined) return node // we haven't annotated
-        let trace = combine_traces(calls[location].traces)
+    node.getParameters().forEach((param, i) => {
+      // TODO: if we're array destructuring do something
+      
+      param.setType(trace.args[i].toTypeString(indentation, level))
+    })
 
-        const parameters = (node as ts.FunctionLikeDeclarationBase).parameters
-        const newparameters: ts.ParameterDeclaration[] = []
-        
-        let i=0;
-        for (const param of parameters) {
-          
-          // if our parameter is destructured we have to do our types in the fancy way
-          newparameters.push(ts.factory.updateParameterDeclaration(
-            param,
-            param.modifiers,
-            param.dotDotDotToken,
-            param.name,
-            param.questionToken,
-            trace.args[i++].toAst(),
-            param.initializer
-          ))
-        }
-        
-
-        const newreturn = trace.returns.type !== "undefined" ? trace.returns.toAst() : undefined
-        
-        
-        if (ts.isFunctionDeclaration(node))
-          return ts.factory.updateFunctionDeclaration(node,
-            node.modifiers,
-            node.asteriskToken, 
-            node.name,
-            node.typeParameters, // TODO: use generics
-            newparameters,
-            newreturn,
-            node.body)
-
-        if (ts.isFunctionExpression(node))
-            return ts.factory.updateFunctionExpression(node,
-              node.modifiers,
-              node.asteriskToken, 
-              node.name,
-              node.typeParameters, // TODO: use generics
-              newparameters,
-              newreturn,
-              node.body)
-        if (ts.isArrowFunction(node))
-            return ts.factory.updateArrowFunction(node,
-              node.modifiers,
-              node.typeParameters, // TODO: use generics
-              newparameters,
-              newreturn,
-              node.equalsGreaterThanToken,
-              node.body)
-        if (ts.isMethodDeclaration(node))
-            return ts.factory.updateMethodDeclaration(node,
-              node.modifiers,
-              node.asteriskToken, 
-              node.name,
-              node.questionToken,
-              node.typeParameters, // TODO: use generics
-              newparameters,
-              newreturn,
-              node.body)
-        if (ts.isConstructorDeclaration(node))
-            return ts.factory.updateConstructorDeclaration(node,
-              node.modifiers,
-              newparameters,
-              node.body)
-        if (ts.isGetAccessor(node))
-            return ts.factory.updateGetAccessorDeclaration(node,
-              node.modifiers,
-              node.name,
-              newparameters,
-              newreturn,
-              node.body)
-        if (ts.isSetAccessor(node))
-            return ts.factory.updateSetAccessorDeclaration(node,
-              node.modifiers,
-              node.name,
-              newparameters,
-            node.body)
-       
+    // set return type
+    // TODO: do generators
+    if (trace.yields.length !== 0) {
+      let gen = [combine_types(trace.yields).toTypeString(indentation, level)]
+      if (trace.returns.type !== "undefined") gen.push(trace.returns.toTypeString(indentation, level))
+      node.setReturnType(`Generator<${gen.join(", ")}>`)
+      return
     }
 
-    return node
-  }
+    if (trace.returns.type !== "undefined") node.setReturnType(trace.returns.toTypeString(indentation, level))
+    // }
 
-  return ts.visitNode(root, visit)
-}
-
-const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
-export function transform(filename: string) {
-  let source = ts.createSourceFile(filename, readFileSync(filename).toString(), ts.ScriptTarget.ES2024)
-  let res = ts.transform(source, [transformer])
-
-  return printer.printFile(res.transformed[0] as ts.SourceFile)
+  })
   
+  // add_imports(source, path.dirname(filename), imports)
+  add_imports(source, path.dirname(filename)+path.sep, imports)
+  return source.getFullText()
 }
+
 
 
