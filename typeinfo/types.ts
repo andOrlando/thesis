@@ -45,7 +45,6 @@ export function compute_typeinfo(t: any, loc: string, refs?: WeakMap<any, TypeIn
 export interface TypeInfo {
   type: string
   toUnique: () => string
-  // toAst: () => ts.TypeNode
   toTypeString: (indentation: string, level: number) => string
 }
 
@@ -115,13 +114,19 @@ export class FunctionTI implements TypeInfo {
     // TODO: determine param names from location and do stuff with that
     if (this.location !== undefined) {}
 
-    let trace = combine_traces(this.traces.traces)
+    let [trace, generics] = combine_traces(this.traces.traces)
     let params = trace.args.map(a => a.toTypeString(text, level))
       .map((a, i) => `p${i}: ${a}`)
       .join(", ")
 
     // TODO: handle yields
     let returns = trace.returns.toTypeString(text, level)
+
+    if (generics.length > 0) {
+      let generics_s = generics.map((g, i) => `T${i} extends ${g.toTypeString(text, level)}`)
+      return `<${generics_s.join(", ")}>(${params}) => ${returns}`
+    }
+
     return `(${params}) => ${returns}`
   }
 }

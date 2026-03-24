@@ -122,14 +122,13 @@ function abstract_nested_types(tis: TypeInfo[], isyield?: boolean): TypeInfo[] |
       return {
         container: true,
         type: "tuple",
-        value: (tis[0] as ArrayTI).elemtypes.map((_, col) => (tis as ArrayTI[]).map(row => row.elemtypes[col]))
+        value: (tis[0] as ArrayTI).elemtypes.map((_, col) => abstract_nested_types((tis as ArrayTI[]).map(row => row.elemtypes[col])))
       }
     }
   }
   
   // are they homogenous lists
   let is_homogenous = true
-  let typ: string|undefined = undefined
   for (const ti of tis) {
     if (!(ti instanceof ArrayTI)) {
       is_homogenous = false
@@ -144,17 +143,8 @@ function abstract_nested_types(tis: TypeInfo[], isyield?: boolean): TypeInfo[] |
       break
     }
     
-    let monotype = elemtypes.values().next().value
-    if (typ == undefined) {
-      typ = monotype
-      continue
-    }
-    if (monotype !== typ) {
-      is_homogenous = false
-      break
-    }
   }
-  if (is_homogenous && typ != undefined) {
+  if (is_homogenous) {
     return {
       container: true,
       type: "array",
@@ -228,7 +218,7 @@ function deabstract(elem: Container|TypeInfo[]): TypeInfo[] {
       for (let i=0; i<elem.n!; i++) {
         let params = {}
         for (let j=0; j<keys.length; j++) {
-          params[keys[j]] = elem.value[j][i]
+          params[keys[j]] = deabstract(elem.value[j])[i]
         }
         res.push(new ObjectTI(params))
       }
@@ -238,27 +228,29 @@ function deabstract(elem: Container|TypeInfo[]): TypeInfo[] {
       res = []
 
       // we'll never be an empty tuple so we're certain we have at least one value
-      for (let i=0; i<elem.value[0].length; i++) {
-        res.push(new TupleTI(elem.value.map((a: TypeInfo[]) => a[i])))
+      // first deabstract values
+      let values_deabs = elem.value.map((a: TypeInfo[]) => deabstract(a))
+      for (let i=0; i<values_deabs[0].length; i++) {
+        res.push(new TupleTI(values_deabs.map((a: TypeInfo[]) => a[i])))
       }
 
       return res
     case "array":
-      return elem.value.map((a: TypeInfo) => new ArrayTI([a]))
+      return deabstract(elem.value).map((a: TypeInfo) => new ArrayTI([a]))
    
   }
   throw Error("unreachable")
 }
 
 
-function compute_generics(traces: Trace[]): Trace[] {
+function compute_generics(traces: Trace[]): [Trace[], TypeInfo[]] {
   
   let traces_u: TypeInfo[][] = traces.map(trace => [...trace.args, new ArrayTI(trace.yields), trace.returns])
 
   // add metadata to complex types so we can unrwap
   // each row will either be the traces for a parameter or a container
   // containers represent multiple rows in some manner and will be unrolled in the next step
-  let types_abs: (TypeInfo[]|Container)[] = transpose(traces_u).map((elem, i) => abstract_nested_types(elem, i==traces_u.length-2))
+  let types_abs: (TypeInfo[]|Container)[] = transpose(traces_u).map((elem, i) => abstract_nested_types(elem, i==traces_u[0].length-2))
 
   // unwrap types_abs
   function unwrap(elem: Container|TypeInfo[]) {
@@ -268,7 +260,7 @@ function compute_generics(traces: Trace[]): Trace[] {
       case "tuple":
         return (elem.value as TypeInfo[][]).map(unwrap).flat()
       case "array":
-        return [elem.value]
+        return unwrap(elem.value)
     }
     throw Error("unreachable")
   }
@@ -286,21 +278,28 @@ function compute_generics(traces: Trace[]): Trace[] {
   // any two columns with equivalent rows should be replaced with equivalent generics
   let generics = rows.map(() => -1)
   let generic_index = 0
+  let generics_values: TypeInfo[] = []
 
   for (let i=0; i<rows.length-1; i++) {
     if (generics[i] !== -1) continue
     // if it's just one type don't make it generic
-    if (new Set(rows[i].map(a => a.toUnique())).size <= 1) continue
+    if (new Set(deabstract(rows[i]).map(a => a.toUnique())).size <= 1) continue
     
     outer:
     for (let j=i+1; j<rows.length; j++) {
       if (generics[j] !== -1) continue
       // check for equality
       for (let k=0; k<rows[i].length; k++) {
-        if (rows[i][k].toUnique() !== rows[j][k].toUnique()) continue outer
+        if (rows[i][k].toUnique() !== rows[j][k].toUnique()) {
+          continue outer
+        }
       }
+
       // if we find now difference, mark i and j as the same
-      if (generics[i] == -1) generics[i] = generic_index++
+      if (generics[i] == -1) {
+        generics_values.push(new UnionTI(rows[i]))
+        generics[i] = generic_index++
+      }
       generics[j] = generics[i]
     }
   }
@@ -346,16 +345,17 @@ function compute_generics(traces: Trace[]): Trace[] {
     trace.returns = traces_u_g[i][traces_u_g[i].length-1]
   })
 
-  return traces
+  return [traces, generics_values]
   
 }
 
 
 
-export function combine_traces(traces: Trace[]): Trace {
+export function combine_traces(traces: Trace[]): [Trace, TypeInfo[]] {
 
   // do generics
-  traces = compute_generics(traces)
+  let generics: TypeInfo[];
+  [traces, generics] = compute_generics(traces)
   
   // otherwise try to combine types in a trace
   let result = new Trace([], traces[0].location)
@@ -370,7 +370,7 @@ export function combine_traces(traces: Trace[]): Trace {
   }
   result.returns = combine_types(traces.map(t => t.returns))
 
-  return result
+  return [result, generics]
 }
 
 
@@ -388,10 +388,10 @@ export function combine_types(types: TypeInfo[]): TypeInfo {
 
       let tup: TypeInfo[] = []
       for (let i=0; i<tups[0].elems.length; i++) {
-        tup.push(combine_types(tups.map(a => a[i])))
+        tup.push(combine_types(tups.map(a => a.elems[i])))
       }
       
-      return combine_types([new TupleTI(tup), ...types.filter(a => !(a instanceof TupleTI) || a.elems.length != elem.elems.length)])
+      return combine_types([...types.filter(a => !(a instanceof TupleTI) || a.elems.length != elem.elems.length), new TupleTI(tup)])
     }
 
     // combine all arrays into one guy
@@ -405,7 +405,7 @@ export function combine_types(types: TypeInfo[]): TypeInfo {
       if (arrs.length <= 1) continue
 
       // otherwise we just union everything
-      return combine_types([new ArrayTI([combine_types(arrs.flatMap(a => a.elemtypes))]), ...types.filter(a => !(a instanceof ArrayTI))])
+      return combine_types([...types.filter(a => !(a instanceof ArrayTI)), new ArrayTI([combine_types(arrs.flatMap(a => a.elemtypes))])])
     }
 
     // try to combine some objects into one guy
@@ -433,7 +433,7 @@ export function combine_types(types: TypeInfo[]): TypeInfo {
         res.params[key] = combine_types(objs.map(obj => obj.params[key] ?? new PrimitiveTI(undefined)))
       }
 
-      return res
+      return combine_types([...types.filter(a => !(a instanceof ObjectTI)), res])
     }
     
     

@@ -160,7 +160,6 @@ describe("integration tests for objects", () => {
       return a
     }
     f({a: 1})`))
-  console.log(_)
 
     assert.equal(out.split("\n").slice(1, -2).join("\n"), dedent(`
     function f(a: { a: number, b?: number }): { a: number, b?: number } {

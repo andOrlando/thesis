@@ -45,7 +45,7 @@ export function transform(filename: string) {
 
     const location = node_location_map.get(node)
     if (location === undefined || calls[location] === undefined) return node // we haven't annotated
-    let trace = combine_traces(calls[location].traces)
+    let [trace, generics] = combine_traces(calls[location].traces)
     let level = node.getIndentationLevel();
 
     // add all class types to imports if need be
@@ -59,6 +59,12 @@ export function transform(filename: string) {
       if (!imports.has(fname)) imports.set(fname, new Set())
       imports.get(fname)!.add(ti.name)
     }
+    
+    // make generics
+    node.addTypeParameters(generics.map((typs, i) => ({
+      name: `T${i}`,
+      constraint: typs.toTypeString(indentation, level)
+    })))
     
     node.getParameters().forEach((param, i) => {
       // TODO: if we're array destructuring do something
