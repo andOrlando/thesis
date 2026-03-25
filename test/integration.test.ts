@@ -76,15 +76,17 @@ describe("basic integration tests", () => {
   it("should handle arrays", () => {
     let [out, _] = run_self(dedent(`
     function f(a) { return }
-    f([1, 2, 3])`))
+    f([1, 2, 3, 4, 5, 6])`))
 
     assert.equal(out.split("\n")[1], "function f(a: number[]) { return }")
   })
 
-  it("should handle tuples", {skip: true}, () => {
-    // if something is always called with the same types in the same order and it's less 
-    // than a threshold (say 5) it should be a tuple rather than a list
-    assert.fail()
+  it("should handle tuples", () => {
+    let [out, _] = run_self(dedent(`
+    function f() { return [1, "a"] }
+    f();`))
+
+    assert.equal(out.split("\n")[1], `function f(): [number, string] { return [1, "a"] }`)
   })
 
 })
@@ -139,6 +141,17 @@ describe("integration tests for higher order functions", () => {
 
     assert.equal(out.split("\n")[1], `function f(a: (p0: string) => string) { a("hi") }`)
     assert.equal(out.split("\n")[2], `function g(s: string): string { return s }`)
+  })
+
+  it("should combine alike functions", () => {
+    let [out, _] = run_self(dedent(`
+    function a() { return "a" }
+    function b() { return "b" }
+    function c(f) { return f() }
+    c(a);
+    c(b);`))
+
+    assert.equal(out.split("\n")[3], `function c(f: () => string): string { return f() }`)
   })
   
 })
@@ -323,12 +336,63 @@ describe("import from node_modules", () => {
     g();`))
   })
 
-  
- 
 })
 
 
+describe("write out generics", () => {
+  it("should handle simple generics", () => {
+    let [out, _] = run_self(dedent(`
+    function a(s) { return s; }
+    a(5);
+    a("a");`))
 
+    assert.equal(out.split("\n").slice(1, -2).join("\n"), dedent(`
+    function a<T0 extends number|string>(s: T0): T0 { return s; }
+    a(5);
+    a("a");`))
+  })
+
+
+  it("should handle generics in nested functions", () => {
+    let [out, _] = run_self(dedent(`
+    function b(a, s) { return a(s); }
+    function a(s) { return s; }
+    b(a, 5);
+    b(a, "a");`))
+
+    assert.equal(out.split("\n").slice(1, -2).join("\n"), dedent(`
+    function b<T0 extends number|string>(a: <T1 extends number|string>(p0: T1) => T1, s: T0): T0 { return a(s); }
+    function a<T0 extends number|string>(s: T0): T0 { return s; }
+    b(a, 5);
+    b(a, "a");`))
+  })
+
+  it("should handle nesting parameters and functions", () => {
+    let [out, _] = run_self(dedent(`
+    function c(s) {
+      function a(s) { return s; }
+      function b(f, s) {
+        return f(s);
+      }
+      return b(a, s)
+    }
+    c(5);
+    c("a");`))
+
+    console.log(_)
+  
+    assert.equal(out.split("\n").slice(1, -2).join("\n"), dedent(`
+    function c<T0 extends number|string>(s: T0): T0 {
+      function a<T1 extends number|string>(s: T1): T1 { return s; }
+      function b<T1 extends number|string>(f: <T2 extends number|string>(p0: T2) => T2, s: T1): T1 {
+        return f(s);
+      }
+      return b(a, s)
+    }
+    c(5);
+    c("a");`))
+  })
+}) 
 
 
 

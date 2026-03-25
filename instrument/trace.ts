@@ -26,7 +26,6 @@ function wrap_function(f: Function, loc: string): Function {
     const fti = FunctionTI.function_typeinfo_map.get(f)!
     const wrapped = function(...args: any[]) {
       const trace = new Trace(args, loc)
-      fti.traces.add(trace)
       args = args.map((arg, i) => process_argument(arg, trace.args[i], loc))
       const res = f(...args)
 
@@ -34,6 +33,7 @@ function wrap_function(f: Function, loc: string): Function {
       // if (typeof res !== "object" || (res instanceof GeneratorFunction)) {
       if (!(f.constructor instanceof GeneratorFunction)) {
         trace.returns = compute_typeinfo(res, loc)
+        fti.traces.add(trace)
         return process_argument(res, trace.returns, loc)
       }
 
@@ -45,8 +45,10 @@ function wrap_function(f: Function, loc: string): Function {
         if (!next.done) trace.yields.push(ti)
         else trace.returns = ti
         next.value = process_argument(next.value, ti, loc)
+        fti.traces.add(trace)
         return next
       }
+
       return res
     }
     FunctionTI.function_typeinfo_map.set(wrapped, fti)
@@ -108,29 +110,17 @@ global.__logret = function(callid: string|undefined, f: Function, val?: any): an
 
   val = process_argument(val, inflight[callid].returns, inflight[callid].location)
   
-  // if we're in the rare case that we call a function whose reference we can't get
-  // users should not be able to get it either, so we just don't set funcref_trace_map
-  // since it can never be passed into anything
-  if (f === undefined) {
+
+  // if we've seen it wrapped, update that traceset
+  // TODO: we should only do this for non-profiled functions
+  if (funcref_trace_map.has(f)) {
+    funcref_trace_map.get(f)!.add(inflight[callid])
+  }
+  
+  if (f === undefined || calls[loc] === undefined) {
     calls[loc] = new TraceSet()
   }
-
-  // if we've seen it wrapped first
-  else if (funcref_trace_map.has(f)) {
-    calls[loc] = funcref_trace_map.get(f)!
-  }
-  // if we've seen it called before but it's not in funcref_trace_map
-  // this shouldn't happen
-  else if (calls.hasOwnProperty(loc)) {
-    funcref_trace_map.set(f, calls[loc])
-  }
-  // if we've never seen it before
-  else {
-    const traceset = new TraceSet()
-    calls[loc] = traceset
-    funcref_trace_map.set(f, traceset)
-  }
-
+  
   // bank the parameters/returns
   calls[loc].add(inflight[callid])
   delete inflight[callid]

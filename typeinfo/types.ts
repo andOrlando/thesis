@@ -42,10 +42,21 @@ export function compute_typeinfo(t: any, loc: string, refs?: WeakMap<any, TypeIn
   }
 }
 
+export interface EmitCTX {
+  // some numbre of tabs or spaces
+  indentation: string,
+  // indentation level
+  level: number,
+  // what Ti are we up to in the parent
+  generic_offset: number
+  // how many generics in the function
+  n_generics: number
+}
+
 export interface TypeInfo {
   type: string
   toUnique: () => string
-  toTypeString: (indentation: string, level: number) => string
+  toTypeString: (ctx: EmitCTX) => string
 }
 
 export class PrimitiveTI implements TypeInfo {
@@ -67,8 +78,22 @@ export class FunctionTI implements TypeInfo {
 
   // we only ever have one FunctionTI for each function
   static function_typeinfo_map: WeakMap<Function, FunctionTI> = new WeakMap()
+  static function_location_map: WeakMap<Function, string> = new WeakMap()
+  static location_fti_map: Map<string, FunctionTI> = new Map()
+
   static get(f: Function): FunctionTI {
-    if (!this.function_typeinfo_map.has(f)) this.function_typeinfo_map.set(f, new FunctionTI(f))
+    // if we're passed a wrapped function, unwrap it
+    while (f.hasOwnProperty(WRAP_PARAMID)) {
+      f = f[WRAP_PARAMID] as Function
+    }
+
+    if (!this.function_typeinfo_map.has(f)) {
+      // if (!funcref_trace_map.has(f)) {
+      //   funcref_trace_map.set(f, new TraceSet())
+      // }
+      // this.function_typeinfo_map.set(f, new FunctionTI(funcref_trace_map.get(f)!, f))
+      this.function_typeinfo_map.set(f, new FunctionTI(new TraceSet(), f))
+    }
     return this.function_typeinfo_map.get(f)!
   }
   static location_promises: (() => Promise<void>)[] = []
@@ -76,37 +101,23 @@ export class FunctionTI implements TypeInfo {
     await Promise.all(this.location_promises.map(f => f()))
   }
 
-  
-  // TODO: it's probably bad to have this as a promise
-  // not sure yet how to resolve the async
   location?: Location
   traces: TraceSet
   uuid: string
   type: "function"
-  constructor(t: Function) {
+  constructor(t: TraceSet, f?: Function) {
     this.type = "function"
     this.uuid = crypto.randomUUID()
-
-    // if we're passed a wrapped function, unwrap it
-    while (t.hasOwnProperty(WRAP_PARAMID)) {
-      t = t[WRAP_PARAMID] as Function
-    }
-
-    // if this function has already been profiled by us, use the one traceset
-    // if it has not, it's still possilbe that it's profiled in the future, so add to the map
-    if (funcref_trace_map.has(t)) {
-      this.traces = funcref_trace_map.get(t)!
-    } else {
-      this.traces = new TraceSet()
-      funcref_trace_map.set(t, this.traces)
-    }
+    this.traces = t
     
-    FunctionTI.location_promises.push(async () => { this.location = await locate(t) })
+    if (f !== undefined) {
+      FunctionTI.location_promises.push(async () => { this.location = await locate(f) })
+    }
   }
   toUnique() {
     return this.uuid
   }
-  toTypeString(text: string, level: number) {
+  toTypeString(ctx: EmitCTX) {
     
     // if it hasn't been called, just return Function
     if (this.traces.size === 0) return "Function"
@@ -115,15 +126,17 @@ export class FunctionTI implements TypeInfo {
     if (this.location !== undefined) {}
 
     let [trace, generics] = combine_traces(this.traces.traces)
-    let params = trace.args.map(a => a.toTypeString(text, level))
+    let ctx_for_params = {...ctx, generic_offset: ctx.generic_offset+ctx.n_generics}
+
+    let params = trace.args.map(a => a.toTypeString(ctx_for_params))
       .map((a, i) => `p${i}: ${a}`)
       .join(", ")
 
     // TODO: handle yields
-    let returns = trace.returns.toTypeString(text, level)
+    let returns = trace.returns.toTypeString(ctx_for_params)
 
     if (generics.length > 0) {
-      let generics_s = generics.map((g, i) => `T${i} extends ${g.toTypeString(text, level)}`)
+      let generics_s = generics.map((g, i) => `T${i+ctx_for_params.generic_offset} extends ${g.toTypeString(ctx_for_params)}`)
       return `<${generics_s.join(", ")}>(${params}) => ${returns}`
     }
 
@@ -219,11 +232,11 @@ export class ObjectTI implements TypeInfo {
     return this.#string_cached
   }
 
-  toTypeString(text: string, level: number) {
+  toTypeString(ctx: EmitCTX) {
     let seen = new WeakSet<Object>()
-    function _toTypeString(node: ObjectTI, level: number) {
+    function _toTypeString(node: ObjectTI, ctx: EmitCTX) {
       // if it's cyclic just put Object
-      if (node.type !== "object") return node.toTypeString(text, 0)
+      if (node.type !== "object") return node.toTypeString({ ...ctx, level: 0 })
       if (seen.has(node)) return "Object"
       seen.add(node)
 
@@ -240,7 +253,7 @@ export class ObjectTI implements TypeInfo {
           questionmark.push(key)
         }
         
-        types[key] = typ!.toTypeString(text, level)
+        types[key] = typ!.toTypeString(ctx)
       }
 
       function compute_keystring(key: string): string {
@@ -257,18 +270,18 @@ export class ObjectTI implements TypeInfo {
         // we need to indent which in practice means line breaking with \n+\t*level after the first open bracket until the last close bracket, which gets \n+\t*(level-1)
         return Object.entries(types).map(([key, value]: [string, string], i) => {
           // indent everything below
-          value = value.split("\n").map(a => text.repeat(level+1)+a).join("\n")
+          value = value.split("\n").map(a => ctx.indentation.repeat(ctx.level+1)+a).join("\n")
           // write the properties
-          let res = "\n" + text.repeat(level+1) + `${compute_keystring(key)}: ${value}`
+          let res = "\n" + ctx.indentation.repeat(ctx.level+1) + `${compute_keystring(key)}: ${value}`
           // last guy also has to include the next line for the closing bracket
-          if (i == keys.length-1) res = res + "\n" + text.repeat(level)
+          if (i == keys.length-1) res = res + "\n" + ctx.indentation.repeat(ctx.level)
           return res
         }).join("")
       }
 
       return `{ ${Object.entries(types).map(([key, value]) => `${compute_keystring(key)}: ${value}`).join(", ")} }`
     }
-    return _toTypeString(this, level)
+    return _toTypeString(this, ctx)
   }
 
 
@@ -289,10 +302,10 @@ export class ArrayTI implements TypeInfo {
   toUnique() {
     return `(${this.elemtypes.map(a => a.toUnique()).join("|")})[]`
   }
-  toTypeString(text: string, level: number) {
+  toTypeString(ctx: EmitCTX) {
     let type = combine_types(this.elemtypes)
-    if (type instanceof ArrayTI || type instanceof PrimitiveTI) return `${type.toTypeString(text, level)}[]`
-    return `(${type.toTypeString(text, level)})[]`
+    if (type instanceof ArrayTI || type instanceof PrimitiveTI) return `${type.toTypeString(ctx)}[]`
+    return `(${type.toTypeString(ctx)})[]`
   }
 }
 
@@ -306,8 +319,8 @@ export class TupleTI implements TypeInfo {
   toUnique() {
     return `[${this.elems.map(a => a.toUnique()).join(",")}]`
   }
-  toTypeString(text: string, level: number) {
-    return `[${this.elems.map(a => a.toTypeString(text, level)).join(", ")}]`
+  toTypeString(ctx: EmitCTX) {
+    return `[${this.elems.map(a => a.toTypeString(ctx)).join(", ")}]`
   }
 }
 
@@ -371,8 +384,8 @@ export class UnionTI implements TypeInfo {
   toUnique() {
     return [...this.types.typeset].join("|")
   }
-  toTypeString(text: string, level: number) {
-    return this.types.types.map(a => a.toTypeString(text, level)).join("|")
+  toTypeString(ctx: EmitCTX) {
+    return this.types.types.map(a => a.toTypeString(ctx)).join("|")
   }
 }
 
@@ -387,8 +400,8 @@ export class GenericTI implements TypeInfo {
   toUnique() {
     return `T${this.index}`
   }
-  toTypeString() {
-    return `T${this.index}`
+  toTypeString(ctx: EmitCTX) {
+    return `T${this.index+ctx.generic_offset}`
   }
 }
 
@@ -406,8 +419,6 @@ export class Trace {
     this.yields = []
     this.returns = new PrimitiveTI(undefined)
   }
-  
-  
   toUnique() {
     return `[${this.args.map(a => a.toUnique()).join(",")}],[${this.yields.map(a => a.toUnique()).join(",")}],${this.returns.toUnique()}`
   }

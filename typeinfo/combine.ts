@@ -1,4 +1,4 @@
-import { Trace, UnionTI, PrimitiveTI, ArrayTI, GenericTI, ObjectTI, TupleTI } from "./types.ts"
+import { Trace, UnionTI, PrimitiveTI, ArrayTI, GenericTI, ObjectTI, TupleTI, FunctionTI, TraceSet } from "./types.ts"
 import type { TypeInfo } from "./types.ts"
 
 const TUPLE_MAX_LENGTH=5
@@ -106,8 +106,8 @@ function abstract_nested_types(tis: TypeInfo[], isyield?: boolean): TypeInfo[] |
     }
     if ((ti as ArrayTI).elemtypes.length > TUPLE_MAX_LENGTH
         || (ti as ArrayTI).elemtypes.length == 0
-        || isyield
-        || tis.length == 1) {
+        || isyield) {
+        // || tis.length == 1) {
       is_tuple = false
       break
     }
@@ -339,13 +339,15 @@ function compute_generics(traces: Trace[]): [Trace[], TypeInfo[]] {
 
   // finally finally we remake our traces
   // second last should be yield, last should be return
-  traces.forEach((trace, i) => {
-    trace.args = traces_u_g[i].slice(0, -2)
-    trace.yields = (traces_u_g[i][traces_u_g[i].length-2] as ArrayTI).elemtypes
-    trace.returns = traces_u_g[i][traces_u_g[i].length-1]
+  let res = traces.map((trace, i) => {
+    let trace_new =  new Trace([], trace.location);
+    trace_new.args = traces_u_g[i].slice(0, -2)
+    trace_new.yields = (traces_u_g[i][traces_u_g[i].length-2] as ArrayTI).elemtypes
+    trace_new.returns = traces_u_g[i][traces_u_g[i].length-1]
+    return trace_new
   })
 
-  return [traces, generics_values]
+  return [res, generics_values]
   
 }
 
@@ -377,6 +379,29 @@ export function combine_traces(traces: Trace[]): [Trace, TypeInfo[]] {
 export function combine_types(types: TypeInfo[]): TypeInfo {
   
   for (const elem of types) {
+
+    // combine functions into one guy
+    // TODO: should we only do this if location is the same or not?
+    // pros: we could use actual paremeter names for functions
+    // cons: it could make things messy, like () => string|() => string|() => string
+    if (elem instanceof FunctionTI) {
+      let funcs = types.filter(a => a instanceof FunctionTI)
+
+      if (funcs.length <= 1) continue
+      
+      let max_args = funcs.reduce((acc, func) => Math.max(acc, func.traces.traces[0].args.length), 0)
+
+      let fti = new FunctionTI(new TraceSet())
+      for (const func of funcs) {
+        for (const trace of func.traces.traces) {
+          let trace_copy = Object.assign(Object.create(Object.getPrototypeOf(trace)), trace)
+          trace_copy.args = trace_copy.args.concat(Array(max_args-trace_copy.args.length).fill(new PrimitiveTI(undefined)))
+          fti.traces.add(trace_copy)
+        }
+      }
+      
+      return combine_types([...types.filter(a => !(a instanceof FunctionTI)), fti])
+    }
 
     // combine tuples into one guy
     if (elem instanceof TupleTI) {

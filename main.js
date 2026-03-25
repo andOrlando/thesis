@@ -1,4 +1,9 @@
-import { f2 } from "./main2.js"
-
-export function f(a) { return a }
-f(f2())
+function c(s) {
+  function a(s) { return s; }
+  function b(a, s) {
+    return a(s);
+  }
+  return b(a, s)
+}
+c(5);
+c("a");
