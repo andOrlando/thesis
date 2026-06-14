@@ -15,11 +15,22 @@ registerHooks({
     const loaded = nextLoad(url, context)
 
     // only care about code
-    if (typeof loaded.format !== "string" || !(["commonjs", "commonjs-typescript", "module", "module-typescript"].includes(loaded.format)))
+    // if (typeof loaded.format !== "string" || !(["commonjs", "commonjs-typescript", "module", "module-typescript"].includes(loaded.format)))
+    if (!((["commonjs", "module", undefined] as (string|null|undefined)[]).includes(loaded.format))) {
       return loaded
+    }
 
     // no node_modules
     if (url.includes("node_modules")) return loaded
+
+    // no tests
+    if (/\/(tests?|__tests__|spec)\//.test(url)) return loaded
+    if (/\/(test|tests)\.(?:js|ts)$/.test(url)) return loaded
+    if (/[-.](?:test|spec)\.[jt]s$/.test(url)) return loaded
+    if (/test262/.test(url)) return loaded
+    if (/\/test-[^/]+\.[jt]s$/.test(url)) return loaded
+    if (/\.test-d\.ts$/.test(url)) return loaded
+
     
     let fname = url.substring(7)
     loaded.source = instrument(String(loaded.source), fname)

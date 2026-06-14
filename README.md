@@ -47,8 +47,8 @@ all functions are annotated such that we send args, yields and returns. Args wil
 
 # TODOS (not written in code)
 - literally anything with promises
-- profile elements of array destructuring rather than the array itself
-- figure out generics
 - add types to variables that static analysis can't figure out
   - globals like window
   - initializing a variable to an empty list to get filled in later (defaults to never[])
+- sort yield types alphabetically in serialization
+- do generics for <T extends {...}|int>

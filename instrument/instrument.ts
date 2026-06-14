@@ -2,11 +2,53 @@ import * as acorn from "acorn"
 import * as walk from "acorn-walk"
 import * as astring from "astring"
 
+
 const uuid_underscore = () => {
   let s = crypto.randomUUID().replace(/-/g, "_")
   return "a"+s.substring(1)
 }
-const callid_varname = uuid_underscore()
+
+function add_let_to_closest_body(ancestors, name) {
+  const declaration = {
+    type: 'VariableDeclaration',
+    kind: 'let',
+    declarations: [{
+      type: 'VariableDeclarator',
+      id: { type: 'Identifier', name },
+      init: null
+    }]
+  };
+
+  // Walk ancestors from innermost to outermost
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    const node = ancestors[i];
+
+    // Program and BlockStatement have a `body` that is an array of statements
+    if (node.type === 'Program' || node.type === 'BlockStatement') {
+      node.body.unshift(declaration);
+      return node;
+    }
+
+    // A function with a block body — its `.body` is the BlockStatement
+    if (
+      (node.type === 'FunctionDeclaration' ||
+       node.type === 'FunctionExpression' ||
+       node.type === 'ArrowFunctionExpression') &&
+      node.body.type === 'BlockStatement'
+    ) {
+      node.body.body.unshift(declaration);
+      return node.body;
+    }
+
+    // StaticBlock (class static { }) also has a statement-array body
+    if (node.type === 'StaticBlock') {
+      node.body.unshift(declaration);
+      return node;
+    }
+  }
+
+  return null; // nothing suitable found
+}
 
 function make_expression_body(node: acorn.Function) {
   const exp: acorn.Expression = node.body as acorn.Expression
@@ -20,12 +62,10 @@ function make_expression_body(node: acorn.Function) {
   } as acorn.BlockStatement
 }
 
-function name_anonymous_function(node: acorn.ArrowFunctionExpression | acorn.FunctionExpression): [string, acorn.ExpressionStatement] {
+function name_anonymous_function(node: acorn.ArrowFunctionExpression | acorn.FunctionExpression): [string, acorn.AssignmentExpression] {
   let uuid = uuid_underscore()
 
   return [uuid, {
-    type: "ExpressionStatement",
-    expression: {
       type: "AssignmentExpression",
       operator: "=",
       left: {
@@ -33,8 +73,19 @@ function name_anonymous_function(node: acorn.ArrowFunctionExpression | acorn.Fun
         name: uuid
       } as acorn.Identifier,
       right: node
-    } as acorn.AssignmentExpression
-  } as acorn.ExpressionStatement]
+    } as acorn.AssignmentExpression]
+  // return [uuid, {
+  //   type: "ExpressionStatement",
+  //   expression: {
+  //     type: "AssignmentExpression",
+  //     operator: "=",
+  //     left: {
+  //       type: "Identifier",
+  //       name: uuid
+  //     } as acorn.Identifier,
+  //     right: node
+  //   } as acorn.AssignmentExpression
+  // } as acorn.ExpressionStatement]
   
 }
 
@@ -74,6 +125,7 @@ function instrument_body(node: acorn.Function, path: string, self?: acorn.Expres
   const location = `${path}:${location_num === undefined ? node.start : location_num}`
   
   const uuids = node.params.map(uuid_underscore)
+  const callid_varname = uuid_underscore()
 
   // if we're not explicitly given a self, we can just assume we're in
   // a normal function with a name
@@ -269,10 +321,16 @@ function instrument_body(node: acorn.Function, path: string, self?: acorn.Expres
 }
 
 export function instrument(source: string, path: string): string {
-  const ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "module" })
+  let ast
+  try {
+    ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "module", locations: true })
+  } catch {
+    console.log("--------------------DIED-------------------\n", path, "\n", source, "\n")
+  }
 
   walk.ancestor(ast, {
     Function(node: any, _state, ancestors) {
+      if (node.__instrumented) return;
       // if we have an expression function, give it a body so we can add instrumentation
       if (node.expression) make_expression_body(node)
 
@@ -281,7 +339,9 @@ export function instrument(source: string, path: string): string {
       // 
       // for methods we have to specify method_def.start as the location rather than just node.start since
       // tsmorph includes the get/set in the node, whereas acorn does not
-      if (ancestors.length > 1 && ancestors[ancestors.length-2].type == "MethodDefinition"){
+      // if (ancestors.length > 1 && ancestors[ancestors.length-2].type == "Property"
+      //     || ancestors[ancestors.length-2].type == "PropertyDefinition"){
+      if (ancestors.length > 1 && ancestors[ancestors.length-2].type == "MethodDefinition") {
         let method_def = ancestors[ancestors.length-2] as acorn.MethodDefinition
         let funcref: acorn.Expression | undefined
 
@@ -339,23 +399,44 @@ export function instrument(source: string, path: string): string {
       
       // if we have an arrow function, give it a name inline as an expression
       else if (node.type == "ArrowFunctionExpression" || node.type == "FunctionExpression") {
-        
+        if (node.__instrumented) return;
+
         let node_copy = {...node}
-        let [uuid, expression] = name_anonymous_function(node_copy as (acorn.ArrowFunctionExpression|acorn.FunctionExpression))
+        node_copy.__instrumented = true;
 
-        // we have to some pretty type unsafe stuff where we modify inplace the contents of node
+        let [uuid, expression] = name_anonymous_function(node_copy)
+        add_let_to_closest_body(ancestors.slice(0, -1), uuid)
+
         for (const key in node) delete node[key]
-
-        // now we reconstruct node as an expression
         for (const key in expression) node[key] = expression[key]
+        node.__instrumented = true;
 
-        // finally we can instrument the body of the node copy
         instrument_body(node_copy, path, {
           type: "Identifier",
           name: uuid
         } as acorn.Identifier)
         return
       }
+      // else if (node.type == "ArrowFunctionExpression" || node.type == "FunctionExpression") {
+        
+      //   let node_copy = {...node}
+      //   let [uuid, expression] = name_anonymous_function(node_copy as (acorn.ArrowFunctionExpression|acorn.FunctionExpression))
+      //   // names.push(uuid)
+      //   add_let_to_closest_body(ancestors.slice(0, -1), uuid)
+
+      //   // we have to some pretty type unsafe stuff where we modify inplace the contents of node
+      //   for (const key in node) delete node[key]
+
+      //   // now we reconstruct node as an expression
+      //   for (const key in expression) node[key] = expression[key]
+
+      //   // finally we can instrument the body of the node copy
+      //   instrument_body(node_copy, path, {
+      //     type: "Identifier",
+      //     name: uuid
+      //   } as acorn.Identifier)
+      //   return
+      // }
 
       // if we `export function` we need to use the start of the export instead
       if (ancestors.length > 1 && ancestors[ancestors.length-2].type == "ExportNamedDeclaration") {
@@ -374,7 +455,25 @@ export function instrument(source: string, path: string): string {
   
   // console.dir(ast, {depth: null})
   // return astring.generate(ast)
+  // console.log(ast)
+
+
+  // Insert at the top of the program body
+  // TODO: this should be done at the nearest block, not top of the file
+  // if (names.length > 0) {
+  //   ast.body.unshift({
+  //     type: 'VariableDeclaration',
+  //     kind: 'let',
+  //     declarations: names.map(name => ({
+  //       type: 'VariableDeclarator',
+  //       id: { type: 'Identifier', name },
+  //       init: null
+  //     }))
+  //   });
+  // }
+
   let res = astring.generate(ast)
+  // console.log(res)
   return res
 }
 

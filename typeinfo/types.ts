@@ -32,7 +32,10 @@ export function compute_typeinfo(t: any, loc: string, refs?: WeakMap<any, TypeIn
       if (Array.isArray(t)) return ArrayTI.fromArray(t, loc, refs)
 
       // if we have a constructor in the protype this is our class
-      if (Object.getPrototypeOf(t).constructor !== ObjectFunction) return ClassTI.get(t, loc)
+      let constructor = Object.getPrototypeOf(t).constructor
+      if (constructor !== ObjectFunction && constructor !== undefined && constructor.name) {
+        return ClassTI.get(t, loc)
+      }
       
       return ObjectTI.fromObject(t, loc, refs)
     case "function":
@@ -268,15 +271,15 @@ export class ObjectTI implements TypeInfo {
         || keys.length > OBJSTRING_MAX_PARAMS_BEFORE_LINEBREAK)
       {
         // we need to indent which in practice means line breaking with \n+\t*level after the first open bracket until the last close bracket, which gets \n+\t*(level-1)
-        return Object.entries(types).map(([key, value]: [string, string], i) => {
+        return "{" + Object.entries(types).map(([key, value]: [string, string], i) => {
           // indent everything below
           value = value.split("\n").map(a => ctx.indentation.repeat(ctx.level+1)+a).join("\n")
           // write the properties
-          let res = "\n" + ctx.indentation.repeat(ctx.level+1) + `${compute_keystring(key)}: ${value}`
+          let res = "\n" + ctx.indentation.repeat(ctx.level+1) + `${compute_keystring(key)}: ${value}` + (i !== Object.entries(types).length-1 ? "," : "")
           // last guy also has to include the next line for the closing bracket
           if (i == keys.length-1) res = res + "\n" + ctx.indentation.repeat(ctx.level)
           return res
-        }).join("")
+        }).join("") + "}"
       }
 
       return `{ ${Object.entries(types).map(([key, value]) => `${compute_keystring(key)}: ${value}`).join(", ")} }`
@@ -324,6 +327,21 @@ export class TupleTI implements TypeInfo {
   }
 }
 
+export class RecordTI implements TypeInfo {
+  keys: TypeInfo[]
+  values: TypeInfo[]
+  type: "record"
+  constructor(keys: TypeInfo[], values: TypeInfo[]) {
+    
+  }
+  toUnique() {
+    return ""
+  }
+  toTypeString(ctx: EmitCTX) {
+    return ""
+  }
+}
+
 
 // special case of ObjectTI where we accumulate with respect to
 // the function hash in a WeakMap, similar to what we do for functions
@@ -360,14 +378,16 @@ export class ClassTI implements TypeInfo {
     ClassTI.location_promises.push(async () => { this.location = await locate(Object.getPrototypeOf(t).constructor) })
   }
   toUnique() {
-    return this.toString()
+    return this.name || "[unnamed class]"
   }
   toAst() {
     return ts.factory.createTypeReferenceNode(this.name, [])
   }
   toTypeString() {
     // TODO: add generics somehow
-    return this.name
+    // this is assuming its already been imported by postprocessing
+    // TODO: fix the no name case :3
+    return this.name || `[constructor: ${this.location}]`
   }
 }
 

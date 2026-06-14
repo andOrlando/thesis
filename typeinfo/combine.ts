@@ -1,7 +1,8 @@
-import { Trace, UnionTI, PrimitiveTI, ArrayTI, GenericTI, ObjectTI, TupleTI, FunctionTI, TraceSet } from "./types.ts"
+import { Trace, UnionTI, PrimitiveTI, ArrayTI, GenericTI, ObjectTI, TupleTI, FunctionTI, RecordTI, TraceSet, TypeInfoSet } from "./types.ts"
 import type { TypeInfo } from "./types.ts"
 
 const TUPLE_MAX_LENGTH=5
+const RECORD_MIN_LENGTH=15
 
 /*
 int int [int int]
@@ -76,6 +77,7 @@ interface Container {
   type: string,
   value: any
   keys?: (string|symbol)[]
+  keytypes?: PrimitiveTI[]
   n?: number
 }
 
@@ -178,6 +180,7 @@ function abstract_nested_types(tis: TypeInfo[], isyield?: boolean): TypeInfo[] |
     // so when recreating the traces we should be able to just use the same ordering
     let types: {[key: symbol|string]: TypeInfo[]} = {}
     let keys = new Set<symbol|string>()
+    let types_set = new TypeInfoSet()
     for (const ti of (tis as ObjectTI[])) {
       [...Reflect.ownKeys(ti.params)].forEach(e => keys.add(e))
     }
@@ -187,8 +190,24 @@ function abstract_nested_types(tis: TypeInfo[], isyield?: boolean): TypeInfo[] |
     for (const ti of (tis as ObjectTI[])) {
       for (const key of keys_arr) {
         types[key].push(ti.params[key] ?? new PrimitiveTI(undefined))
+        if (ti.params[key] !== undefined) types_set.add(ti.params[key])
       }
     }
+    
+    // do we have a bajillion keys? then we should be a record
+    // if (Object.entries(types).length >= RECORD_MIN_LENGTH) {
+    //   let alltypes = Object.entries(types).map(([_key, value]) => value).flat()
+    //   let keytypes = ([...keys]).map(a => typeof(a));
+    //   return {
+    //     container: true,
+    //     type: "record",
+    //     value: alltypes,
+    //     keytypes: [
+    //       ("symbol" in keytypes ? [new PrimitiveTI(Symbol(0))] : []),
+    //       ("string" in keytypes ? [new PrimitiveTI("")] : [])].flat(), // either symbol, string or symbol|string
+    //     n: tis.length
+    //   }
+    // }
     
     // TODO: when recursing here we need to check for recursion in the objects
     return {
@@ -224,6 +243,12 @@ function deabstract(elem: Container|TypeInfo[]): TypeInfo[] {
       }
 
       return res
+    case "record":
+      res = []
+      for (let i=0; i<elem.n!; i++) {
+        res.push(new RecordTI(elem.keytypes!, elem.value))
+      }
+      return res
     case "tuple":
       res = []
 
@@ -258,6 +283,7 @@ function compute_generics(traces: Trace[]): [Trace[], TypeInfo[]] {
     switch (elem.type) {
       case "object":
       case "tuple":
+      case "record":
         return (elem.value as TypeInfo[][]).map(unwrap).flat()
       case "array":
         return unwrap(elem.value)
@@ -389,7 +415,7 @@ export function combine_types(types: TypeInfo[]): TypeInfo {
 
       if (funcs.length <= 1) continue
       
-      let max_args = funcs.reduce((acc, func) => Math.max(acc, func.traces.traces[0].args.length), 0)
+      let max_args = funcs.filter(a => a.traces.size > 0).reduce((acc, func) => Math.max(acc, func.traces.traces[0].args.length), 0)
 
       let fti = new FunctionTI(new TraceSet())
       for (const func of funcs) {

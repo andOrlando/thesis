@@ -57,7 +57,13 @@ function compute_import(filepath: string, abspath: string): string {
   // if in any of the above situations it's an internal class, we need to add a d.ts file to add a public type for that class
   const mod_re = new RegExp(`(.*\\${path.sep})node_modules\\${path.sep}(.*?)\\${path.sep}(.*)(\\..*?$)`)
   const [_, basepath, modname, sourcepath, extension] = mod_re.exec(abspath)!
-  const pkgjson = get_pkgjson(basepath, modname)
+  let pkgjson: Object
+  try {
+    pkgjson = get_pkgjson(basepath, modname)
+  } catch {
+    return path.relative(filepath, abspath)
+  }
+
 
   // if we have exports and filepath in exports
   if ("exports" in pkgjson) {
